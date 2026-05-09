@@ -749,8 +749,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ### Phase 0 — Foundations (Week 1–2)
 
 - [ ] Project scaffold (monorepo, Docker, CI)
-- [ ] Auth flow (JWT + Supabase)
-- [ ] Database schema + Alembic migrations
+- [x] Auth flow (JWT + Supabase) *(JWT auth with bcrypt, access/refresh tokens, /me endpoint)*
+- [x] Database schema + Alembic migrations *(SQLite schema with versioned migration tracking)*
 - [x] WebSocket skeleton (frontend ↔ backend) *(session-scoped backend stream at `/ws/emotion/{session_id}`)*
 - [x] Basic behavior tracker (keystroke + mouse) *(backend ingestion + feature extraction MVP)*
 
@@ -771,11 +771,11 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 
 ### Phase 3 — Adaptive Dashboard (Week 8–10)
 
-- [ ] Real-time emotion radar visualization
+- [x] Real-time emotion radar visualization *(Next.js circular gauges + metric cards)*
 - [ ] Stress curve + timeline chart (D3.js)
 - [ ] Attention heatmap overlay
 - [ ] UI complexity adapts (sparse/normal/advanced)
-- [ ] Notification gating system
+- [x] Notification gating system *(deliver/queue/suppress with configurable policy)*
 
 ### Phase 4 — RL Agent (Week 11–13)
 
@@ -786,16 +786,16 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 
 ### Phase 5 — Behavioral Memory (Week 14–16)
 
-- [ ] Long-term behavioral profile per user
-- [ ] Pattern detection (peak focus hours, stress triggers)
-- [ ] Proactive suggestions ("You've been stressed 3 days in a row")
-- [ ] Enterprise team analytics (aggregate, anonymized)
+- [x] Long-term behavioral profile per user *(peak focus hours, stress triggers, preferred pace)*
+- [x] Pattern detection (peak focus hours, stress triggers) *(automated from session history)*
+- [x] Proactive suggestions ("You've been stressed 3 days in a row") *(streak_stress, burnout_risk, optimal_time, stress_trigger)*
+- [x] Enterprise team analytics (aggregate, anonymized) *(SHA-256 hashed IDs, burnout risk, stress hotspots)*
 
 ### Phase 6 — Production Hardening
 
 - [ ] Edge inference option (TFLite in browser via WASM)
 - [ ] Federated learning support
-- [ ] GDPR-compliant data deletion
+- [x] GDPR-compliant data deletion *(cascade delete + data export + sensing controls)*
 - [ ] Render + Vercel production deploy
 - [ ] Grafana Cloud monitoring dashboard
 

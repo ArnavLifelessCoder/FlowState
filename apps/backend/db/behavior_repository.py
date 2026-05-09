@@ -13,6 +13,10 @@ from models.behavior import (
     BehaviorSnapshotRecord,
     BehaviorSnapshot,
 )
+from models.memory import DailySummary, UserBehavioralProfile
+from models.privacy import SensingState
+from models.session import SessionRecord
+from models.user import UserRecord
 
 
 class BehaviorRepository:
@@ -87,6 +91,79 @@ class BehaviorRepository:
                         exploration INTEGER NOT NULL,
                         q_values_json TEXT NOT NULL,
                         created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS user_behavioral_profiles (
+                        user_id TEXT PRIMARY KEY,
+                        peak_focus_hours TEXT NOT NULL,
+                        stress_triggers TEXT NOT NULL,
+                        preferred_pace TEXT NOT NULL,
+                        avg_cognitive_load REAL NOT NULL,
+                        total_sessions INTEGER NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS session_daily_summaries (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id TEXT NOT NULL,
+                        session_id TEXT NOT NULL,
+                        date TEXT NOT NULL,
+                        avg_cognitive_load REAL NOT NULL,
+                        avg_frustration REAL NOT NULL,
+                        avg_attention REAL NOT NULL,
+                        snapshot_count INTEGER NOT NULL,
+                        peak_hour INTEGER,
+                        dominant_adaptation TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        UNIQUE(user_id, session_id, date)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        session_id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        started_at TEXT NOT NULL,
+                        ended_at TEXT,
+                        platform TEXT NOT NULL DEFAULT 'web'
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sensing_states (
+                        session_id TEXT PRIMARY KEY,
+                        vision_enabled INTEGER NOT NULL DEFAULT 1,
+                        audio_enabled INTEGER NOT NULL DEFAULT 1,
+                        behavior_enabled INTEGER NOT NULL DEFAULT 1,
+                        all_paused INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id TEXT PRIMARY KEY,
+                        username TEXT NOT NULL UNIQUE,
+                        password_hash TEXT NOT NULL,
+                        display_name TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS schema_migrations (
+                        version INTEGER PRIMARY KEY,
+                        applied_at TEXT NOT NULL
                     )
                     """
                 )
@@ -359,3 +436,543 @@ class BehaviorRepository:
         ]
         return records, has_more
 
+    # ── Behavioral Memory ────────────────────────────────────────────
+
+    def upsert_behavioral_profile(self, profile: UserBehavioralProfile) -> None:
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO user_behavioral_profiles(
+                        user_id, peak_focus_hours, stress_triggers, preferred_pace,
+                        avg_cognitive_load, total_sessions, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        peak_focus_hours = excluded.peak_focus_hours,
+                        stress_triggers = excluded.stress_triggers,
+                        preferred_pace = excluded.preferred_pace,
+                        avg_cognitive_load = excluded.avg_cognitive_load,
+                        total_sessions = excluded.total_sessions,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        profile.user_id,
+                        json.dumps(profile.peak_focus_hours),
+                        json.dumps(profile.stress_triggers),
+                        profile.preferred_pace,
+                        profile.avg_cognitive_load,
+                        profile.total_sessions,
+                        profile.updated_at.isoformat(),
+                    ),
+                )
+                conn.commit()
+
+    def get_behavioral_profile(self, user_id: str) -> UserBehavioralProfile | None:
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT user_id, peak_focus_hours, stress_triggers, preferred_pace,
+                           avg_cognitive_load, total_sessions, updated_at
+                    FROM user_behavioral_profiles
+                    WHERE user_id = ?
+                    """,
+                    (user_id,),
+                ).fetchone()
+        if row is None:
+            return None
+        return UserBehavioralProfile(
+            user_id=str(row[0]),
+            peak_focus_hours=json.loads(str(row[1])),
+            stress_triggers=json.loads(str(row[2])),
+            preferred_pace=str(row[3]),
+            avg_cognitive_load=float(row[4]),
+            total_sessions=int(row[5]),
+            updated_at=datetime.fromisoformat(str(row[6])),
+        )
+
+    def delete_behavioral_profile(self, user_id: str) -> bool:
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                cursor = conn.execute(
+                    "DELETE FROM user_behavioral_profiles WHERE user_id = ?", (user_id,)
+                )
+                conn.execute(
+                    "DELETE FROM session_daily_summaries WHERE user_id = ?", (user_id,)
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+
+    def add_daily_summary(self, summary: DailySummary) -> None:
+        self._ensure_ready()
+        created_at = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO session_daily_summaries(
+                        user_id, session_id, date, avg_cognitive_load, avg_frustration,
+                        avg_attention, snapshot_count, peak_hour, dominant_adaptation, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, session_id, date) DO UPDATE SET
+                        avg_cognitive_load = excluded.avg_cognitive_load,
+                        avg_frustration = excluded.avg_frustration,
+                        avg_attention = excluded.avg_attention,
+                        snapshot_count = excluded.snapshot_count,
+                        peak_hour = excluded.peak_hour,
+                        dominant_adaptation = excluded.dominant_adaptation,
+                        created_at = excluded.created_at
+                    """,
+                    (
+                        summary.user_id,
+                        summary.session_id,
+                        summary.date,
+                        summary.avg_cognitive_load,
+                        summary.avg_frustration,
+                        summary.avg_attention,
+                        summary.snapshot_count,
+                        summary.peak_hour,
+                        summary.dominant_adaptation,
+                        created_at,
+                    ),
+                )
+                conn.commit()
+
+    def get_daily_summaries(self, user_id: str, days: int = 30) -> list[DailySummary]:
+        self._ensure_ready()
+        safe_days = max(1, min(days, 365))
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT user_id, session_id, date, avg_cognitive_load, avg_frustration,
+                           avg_attention, snapshot_count, peak_hour, dominant_adaptation
+                    FROM session_daily_summaries
+                    WHERE user_id = ?
+                    ORDER BY date DESC
+                    LIMIT ?
+                    """,
+                    (user_id, safe_days),
+                ).fetchall()
+        return [
+            DailySummary(
+                user_id=str(row[0]),
+                session_id=str(row[1]),
+                date=str(row[2]),
+                avg_cognitive_load=float(row[3]),
+                avg_frustration=float(row[4]),
+                avg_attention=float(row[5]),
+                snapshot_count=int(row[6]),
+                peak_hour=int(row[7]) if row[7] is not None else None,
+                dominant_adaptation=str(row[8]),
+            )
+            for row in rows
+        ]
+
+    def get_all_snapshots_with_timestamps(
+        self, session_ids: list[str],
+    ) -> list[tuple[str, BehaviorSnapshot, str]]:
+        """Return (session_id, snapshot, created_at_iso) for given sessions."""
+        self._ensure_ready()
+        if not session_ids:
+            return []
+        placeholders = ",".join("?" for _ in session_ids)
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT session_id, metrics_json, created_at
+                    FROM behavior_snapshots
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY created_at ASC
+                    """,
+                    tuple(session_ids),
+                ).fetchall()
+        results: list[tuple[str, BehaviorSnapshot, str]] = []
+        for row in rows:
+            snapshot = BehaviorSnapshot.model_validate(json.loads(str(row[1])))
+            results.append((str(row[0]), snapshot, str(row[2])))
+        return results
+
+    def get_distinct_session_ids(self) -> list[str]:
+        """Return all distinct session_ids that have snapshots."""
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT session_id FROM behavior_snapshots"
+                ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    # ── Session Management ────────────────────────────────────────────
+
+    def create_session(
+        self, session_id: str, user_id: str, platform: str = "web",
+    ) -> SessionRecord:
+        self._ensure_ready()
+        started_at = datetime.now(timezone.utc)
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO sessions(session_id, user_id, started_at, platform)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (session_id, user_id, started_at.isoformat(), platform),
+                )
+                conn.commit()
+        return SessionRecord(
+            session_id=session_id,
+            user_id=user_id,
+            started_at=started_at,
+            ended_at=None,
+            platform=platform,
+            is_active=True,
+        )
+
+    def end_session(self, session_id: str) -> SessionRecord | None:
+        self._ensure_ready()
+        ended_at = datetime.now(timezone.utc)
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                cursor = conn.execute(
+                    "UPDATE sessions SET ended_at = ? WHERE session_id = ? AND ended_at IS NULL",
+                    (ended_at.isoformat(), session_id),
+                )
+                conn.commit()
+                if cursor.rowcount == 0:
+                    return None
+        return self.get_session(session_id)
+
+    def get_session(self, session_id: str) -> SessionRecord | None:
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT session_id, user_id, started_at, ended_at, platform FROM sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+        if row is None:
+            return None
+        ended_at = datetime.fromisoformat(str(row[3])) if row[3] else None
+        return SessionRecord(
+            session_id=str(row[0]),
+            user_id=str(row[1]),
+            started_at=datetime.fromisoformat(str(row[2])),
+            ended_at=ended_at,
+            platform=str(row[4]),
+            is_active=ended_at is None,
+        )
+
+    def list_sessions(
+        self, user_id: str, limit: int = 50, active_only: bool = False,
+    ) -> list[SessionRecord]:
+        self._ensure_ready()
+        safe_limit = max(1, min(limit, 200))
+        query = "SELECT session_id, user_id, started_at, ended_at, platform FROM sessions WHERE user_id = ?"
+        params: list[object] = [user_id]
+        if active_only:
+            query += " AND ended_at IS NULL"
+        query += " ORDER BY started_at DESC LIMIT ?"
+        params.append(safe_limit)
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                rows = conn.execute(query, tuple(params)).fetchall()
+        results: list[SessionRecord] = []
+        for row in rows:
+            ended_at = datetime.fromisoformat(str(row[3])) if row[3] else None
+            results.append(
+                SessionRecord(
+                    session_id=str(row[0]),
+                    user_id=str(row[1]),
+                    started_at=datetime.fromisoformat(str(row[2])),
+                    ended_at=ended_at,
+                    platform=str(row[4]),
+                    is_active=ended_at is None,
+                )
+            )
+        return results
+
+    def get_session_ids_for_user(self, user_id: str) -> list[str]:
+        """Return all session_ids belonging to a user."""
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                rows = conn.execute(
+                    "SELECT session_id FROM sessions WHERE user_id = ? ORDER BY started_at DESC",
+                    (user_id,),
+                ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def get_snapshots_for_session(
+        self, session_id: str, limit: int = 200,
+    ) -> list[BehaviorSnapshot]:
+        """Return historical snapshots for a session."""
+        self._ensure_ready()
+        safe_limit = max(1, min(limit, 1000))
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                rows = conn.execute(
+                    "SELECT metrics_json FROM behavior_snapshots WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (session_id, safe_limit),
+                ).fetchall()
+        results: list[BehaviorSnapshot] = []
+        for row in rows:
+            try:
+                data = json.loads(str(row[0]))
+                results.append(BehaviorSnapshot.model_validate(data))
+            except Exception:
+                continue
+        return results
+
+    # ── Privacy / GDPR ───────────────────────────────────────────────
+
+    def delete_all_user_data(self, user_id: str) -> dict[str, int]:
+        """Cascade-delete ALL data for a user across all tables. Returns count per table."""
+        self._ensure_ready()
+        session_ids = self.get_session_ids_for_user(user_id)
+        counts: dict[str, int] = {}
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                if session_ids:
+                    ph = ",".join("?" for _ in session_ids)
+                    for table in [
+                        "behavior_snapshots", "behavior_sessions",
+                        "adaptation_feedback", "adaptation_q_values",
+                        "adaptation_decisions", "sensing_states",
+                    ]:
+                        cursor = conn.execute(
+                            f"DELETE FROM {table} WHERE session_id IN ({ph})",
+                            tuple(session_ids),
+                        )
+                        counts[table] = cursor.rowcount
+
+                # Tables keyed by user_id
+                cursor = conn.execute(
+                    "DELETE FROM user_behavioral_profiles WHERE user_id = ?", (user_id,)
+                )
+                counts["user_behavioral_profiles"] = cursor.rowcount
+                cursor = conn.execute(
+                    "DELETE FROM session_daily_summaries WHERE user_id = ?", (user_id,)
+                )
+                counts["session_daily_summaries"] = cursor.rowcount
+                cursor = conn.execute(
+                    "DELETE FROM sessions WHERE user_id = ?", (user_id,)
+                )
+                counts["sessions"] = cursor.rowcount
+                conn.commit()
+        return counts
+
+    def export_all_user_data(self, user_id: str) -> dict:
+        """Export ALL data for a user as a plain dict."""
+        self._ensure_ready()
+        session_ids = self.get_session_ids_for_user(user_id)
+        data: dict = {
+            "sessions": [],
+            "behavior_snapshots": [],
+            "adaptation_decisions": [],
+            "adaptation_feedback": [],
+            "behavioral_profile": None,
+            "daily_summaries": [],
+            "sensing_states": [],
+        }
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                # Sessions
+                for row in conn.execute(
+                    "SELECT session_id, user_id, started_at, ended_at, platform FROM sessions WHERE user_id = ?",
+                    (user_id,),
+                ).fetchall():
+                    data["sessions"].append({
+                        "session_id": row[0], "user_id": row[1],
+                        "started_at": row[2], "ended_at": row[3], "platform": row[4],
+                    })
+
+                if session_ids:
+                    ph = ",".join("?" for _ in session_ids)
+                    # Behavior snapshots
+                    for row in conn.execute(
+                        f"SELECT id, session_id, metrics_json, created_at FROM behavior_snapshots WHERE session_id IN ({ph})",
+                        tuple(session_ids),
+                    ).fetchall():
+                        data["behavior_snapshots"].append({
+                            "id": row[0], "session_id": row[1],
+                            "metrics": json.loads(str(row[2])), "created_at": row[3],
+                        })
+
+                    # Adaptation decisions
+                    for row in conn.execute(
+                        f"SELECT id, session_id, state_key, action, exploration, q_values_json, created_at FROM adaptation_decisions WHERE session_id IN ({ph})",
+                        tuple(session_ids),
+                    ).fetchall():
+                        data["adaptation_decisions"].append({
+                            "id": row[0], "session_id": row[1], "state_key": row[2],
+                            "action": row[3], "exploration": bool(row[4]),
+                            "q_values": json.loads(str(row[5])), "created_at": row[6],
+                        })
+
+                    # Adaptation feedback
+                    for row in conn.execute(
+                        f"SELECT id, session_id, action, reward, task_completion_delta, emotional_stability_delta, created_at FROM adaptation_feedback WHERE session_id IN ({ph})",
+                        tuple(session_ids),
+                    ).fetchall():
+                        data["adaptation_feedback"].append({
+                            "id": row[0], "session_id": row[1], "action": row[2],
+                            "reward": row[3], "task_completion_delta": row[4],
+                            "emotional_stability_delta": row[5], "created_at": row[6],
+                        })
+
+                    # Sensing states
+                    for row in conn.execute(
+                        f"SELECT session_id, vision_enabled, audio_enabled, behavior_enabled, all_paused, updated_at FROM sensing_states WHERE session_id IN ({ph})",
+                        tuple(session_ids),
+                    ).fetchall():
+                        data["sensing_states"].append({
+                            "session_id": row[0], "vision_enabled": bool(row[1]),
+                            "audio_enabled": bool(row[2]), "behavior_enabled": bool(row[3]),
+                            "all_paused": bool(row[4]), "updated_at": row[5],
+                        })
+
+                # Profile
+                profile = self.get_behavioral_profile(user_id)
+                if profile:
+                    data["behavioral_profile"] = profile.model_dump(mode="json")
+
+                # Daily summaries
+                for s in self.get_daily_summaries(user_id, days=365):
+                    data["daily_summaries"].append(s.model_dump(mode="json"))
+
+        return data
+
+    def upsert_sensing_state(self, state: SensingState) -> None:
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO sensing_states(session_id, vision_enabled, audio_enabled, behavior_enabled, all_paused, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        vision_enabled = excluded.vision_enabled,
+                        audio_enabled = excluded.audio_enabled,
+                        behavior_enabled = excluded.behavior_enabled,
+                        all_paused = excluded.all_paused,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        state.session_id,
+                        1 if state.vision_enabled else 0,
+                        1 if state.audio_enabled else 0,
+                        1 if state.behavior_enabled else 0,
+                        1 if state.all_paused else 0,
+                        state.updated_at.isoformat(),
+                    ),
+                )
+                conn.commit()
+
+    def get_sensing_state(self, session_id: str) -> SensingState | None:
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT session_id, vision_enabled, audio_enabled, behavior_enabled, all_paused, updated_at FROM sensing_states WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+        if row is None:
+            return None
+        return SensingState(
+            session_id=str(row[0]),
+            vision_enabled=bool(row[1]),
+            audio_enabled=bool(row[2]),
+            behavior_enabled=bool(row[3]),
+            all_paused=bool(row[4]),
+            updated_at=datetime.fromisoformat(str(row[5])),
+        )
+
+    # ── Users / Auth ─────────────────────────────────────────────────────
+
+    def create_user(
+        self, user_id: str, username: str, password_hash: str, display_name: str,
+    ) -> UserRecord:
+        self._ensure_ready()
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    "INSERT INTO users(user_id, username, password_hash, display_name, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, username, password_hash, display_name, now.isoformat()),
+                )
+                conn.commit()
+        return UserRecord(
+            user_id=user_id, username=username,
+            display_name=display_name, created_at=now,
+        )
+
+    def get_user_by_username(self, username: str) -> UserRecord | None:
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT user_id, username, display_name, created_at FROM users WHERE username = ?",
+                    (username,),
+                ).fetchone()
+        if row is None:
+            return None
+        return UserRecord(
+            user_id=str(row[0]), username=str(row[1]),
+            display_name=str(row[2]), created_at=datetime.fromisoformat(str(row[3])),
+        )
+
+    def get_user_by_id(self, user_id: str) -> UserRecord | None:
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT user_id, username, display_name, created_at FROM users WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+        if row is None:
+            return None
+        return UserRecord(
+            user_id=str(row[0]), username=str(row[1]),
+            display_name=str(row[2]), created_at=datetime.fromisoformat(str(row[3])),
+        )
+
+    def get_password_hash(self, user_id: str) -> str | None:
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT password_hash FROM users WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+        return str(row[0]) if row else None
+
+    # ── Schema Migrations ────────────────────────────────────────────────
+
+    def get_schema_version(self) -> int:
+        """Return the current schema version (0 if never migrated)."""
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT MAX(version) FROM schema_migrations",
+                ).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def record_migration(self, version: int) -> None:
+        """Record that a migration version has been applied."""
+        self._ensure_ready()
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (version, now.isoformat()),
+                )
+                conn.commit()

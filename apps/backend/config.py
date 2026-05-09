@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO")
 
     api_token: str = Field(default="change-me", min_length=8)
+    jwt_secret: str = Field(default="flowstate-dev-secret-change-in-production-32chars", min_length=32)
     enable_auth: bool = Field(default=True)
 
     database_url: str = Field(default="sqlite:///./flowstate.db")

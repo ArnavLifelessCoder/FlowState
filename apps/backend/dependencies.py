@@ -1,12 +1,18 @@
 from config import get_settings
 from db.behavior_repository import BehaviorRepository
 from services.analytics_service import AnalyticsService
+from services.auth_service import AuthService
 from services.adaptation_feedback_service import AdaptationFeedbackService
 from services.adaptation_rl_service import AdaptationRLService
 from services.adaptation_service import AdaptationService
 from services.behavior_session_service import BehaviorSessionService
 from services.intervention_playback_service import InterventionPlaybackService
+from services.memory_service import MemoryService
+from services.notification_gating_service import NotificationGatingService
+from services.privacy_service import PrivacyService
 from services.realtime_hub import RealtimeHub
+from services.session_management_service import SessionManagementService
+from services.team_analytics_service import TeamAnalyticsService
 
 settings = get_settings()
 behavior_repository = BehaviorRepository(settings.database_url)
@@ -27,4 +33,19 @@ adaptation_feedback_service = AdaptationFeedbackService(
 )
 intervention_playback_service = InterventionPlaybackService(behavior_repository)
 analytics_service = AnalyticsService(behavior_repository)
+memory_service = MemoryService(behavior_repository)
+session_management_service = SessionManagementService(
+    repository=behavior_repository, memory_service=memory_service,
+)
+privacy_service = PrivacyService(behavior_repository)
+notification_gating_service = NotificationGatingService(
+    behavior_sessions=behavior_sessions,
+)
+team_analytics_service = TeamAnalyticsService(behavior_repository)
+auth_service = AuthService(behavior_repository)
+
+
+
+
+
 

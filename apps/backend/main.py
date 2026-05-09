@@ -1,9 +1,11 @@
 import logging
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.v1.router import api_v1_router
+from api.websockets.adaptation_ws import router as adaptation_ws_router
 from api.websockets.emotion_ws import router as emotion_ws_router
 from config import get_settings
 from core.middleware import RequestContextMiddleware
@@ -15,9 +17,17 @@ setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title=settings.app_name)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.add_middleware(RequestContextMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
 app.include_router(emotion_ws_router, prefix="/ws")
+app.include_router(adaptation_ws_router, prefix="/ws")
 
 
 @app.exception_handler(Exception)
@@ -37,4 +47,5 @@ def health() -> dict[str, str | bool]:
     db_ok = behavior_repository.ping()
     status_value = "ok" if db_ok else "degraded"
     return {"status": status_value, "db_ok": db_ok, "environment": settings.environment}
+
 
