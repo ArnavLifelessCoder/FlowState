@@ -143,6 +143,14 @@ class FlowStateAPI {
     return res.json();
   }
 
+  async getCurrentBehavior(sessionId: string) {
+    const res = await this.request(`/behavior/current/${sessionId}`);
+    if (!res.ok) {
+      throw new Error(`Current behavior request failed with ${res.status}`);
+    }
+    return res.json();
+  }
+
   // Notifications
   async evaluateNotification(sessionId: string, source: string, title: string, priority = "normal") {
     const res = await this.request("/notifications/evaluate", {
@@ -162,6 +170,15 @@ class FlowStateAPI {
     return res.json();
   }
 
+  // Adaptation
+  async getAdaptationConfig(sessionId: string) {
+    const res = await this.request(`/adaptation/config/${sessionId}`);
+    if (!res.ok) {
+      throw new Error(`Adaptation config request failed with ${res.status}`);
+    }
+    return res.json();
+  }
+
   // Teams
   async createTeam(teamId: string, userIds: string[]) {
     const res = await this.request("/teams", {
@@ -178,6 +195,34 @@ class FlowStateAPI {
 
   async listTeams() {
     const res = await this.request("/teams");
+    return res.json();
+  }
+
+  // Analytics
+  async getEmotionHistory(sessionId: string, limit = 120) {
+    const safeLimit = Math.max(1, Math.min(limit, 500));
+    const res = await this.request(`/analytics/emotion-history/${sessionId}?limit=${safeLimit}`);
+    if (!res.ok) {
+      throw new Error(`Emotion history request failed with ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async getSessionInsights(sessionId: string, lookback = 120) {
+    const safeLookback = Math.max(1, Math.min(lookback, 500));
+    const res = await this.request(`/analytics/insights/${sessionId}?lookback=${safeLookback}`);
+    if (!res.ok) {
+      throw new Error(`Session insights request failed with ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async getInterventions(sessionId: string, limit = 50) {
+    const safeLimit = Math.max(1, Math.min(limit, 500));
+    const res = await this.request(`/adaptation/interventions/${sessionId}?limit=${safeLimit}`);
+    if (!res.ok) {
+      throw new Error(`Interventions request failed with ${res.status}`);
+    }
     return res.json();
   }
 

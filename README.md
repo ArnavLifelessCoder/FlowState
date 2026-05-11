@@ -2,7 +2,7 @@
 
 > **Real-Time Emotionally Adaptive AI Platform** — a full-stack system that monitors cognitive load, attention, and stress in real time, then adapts digital experiences accordingly.
 
-FlowState consists of a **FastAPI backend** (Python) and a **Next.js 14 dashboard** (TypeScript) that together provide behavior tracking, emotion inference, adaptive UI recommendations, notification gating, team analytics, and GDPR-compliant privacy controls.
+FlowState consists of a **FastAPI backend** (Python) and a **Next.js 16 dashboard** (TypeScript) that together provide behavior tracking, emotion inference, adaptive UI recommendations, notification gating, team analytics, and GDPR-compliant privacy controls.
 
 ## What is implemented
 
@@ -20,12 +20,16 @@ FlowState consists of a **FastAPI backend** (Python) and a **Next.js 14 dashboar
 - **GDPR Privacy** — full data export, cascading deletion, and sensing pause/resume controls.
 - **Schema Migrations** — versioned migration tracking for forward-compatible DB evolution.
 
-### Frontend (Next.js 14 + TypeScript)
+### Frontend (Next.js 16 + TypeScript)
 - **Auth pages** — register/login with JWT token management and auto-refresh.
 - **Dashboard** — real-time circular gauges for cognitive load, frustration, and attention.
+- **Measurement guide** — explains what each metric estimates, which behavior signals feed it, and what the score means.
 - **Behavior tracking** — automatic keypress and mouse event capture sent to backend.
 - **Metric cards** — live-updating statistics with gradient progress bars.
 - **Adaptation display** — shows current recommended adaptation action.
+- **Adaptive UI shell** — applies backend adaptation config as sparse/normal/dense, slow/normal/fast, and minimal/normal/advanced interface states.
+- **Stress timeline** — session-level SVG chart for frustration, cognitive load, attention, summary metrics, and intervention playback.
+- **Attention heatmap overlay** — session-scoped pointer/click concentration map with primary zone, confidence, and latest-position stats.
 - **Notification tester** — interactive form to test notification gating decisions.
 - **Team analytics** — create teams and view anonymized aggregate insights.
 - **Session history** — table with status badges, timestamps, and platform info.
@@ -41,6 +45,10 @@ RealtimeHub publishes updates ->
 Adaptation policy returns UI configuration ->
 Analytics reads history and aggregates insights ->
 MemoryService builds long-term behavioral profiles and generates proactive suggestions
+
+Frontend behavior tracking samples mouse movement before sending it to the backend, records bounded client-side attention points for the heatmap, and polls current snapshots without injecting synthetic behavior into the model.
+
+The dashboard also reads `/adaptation/config/{session_id}` and applies the returned UI config through root data attributes, so high-load states can simplify the interface while low-load states can expose denser analytics.
 
 ## API overview
 
@@ -139,6 +147,43 @@ DailySummary
 - avg_cognitive_load, avg_frustration, avg_attention
 - snapshot_count, peak_hour, dominant_adaptation
 
+## Stress Timeline
+
+The frontend Timeline view uses the existing analytics and adaptation playback APIs to visualize a session over time.
+
+- Chart lines show frustration, cognitive load, and attention from `/analytics/emotion-history/{session_id}`.
+- Window summary cards show aggregate metrics from `/analytics/insights/{session_id}`.
+- Intervention playback lists policy decisions and feedback from `/adaptation/interventions/{session_id}`.
+- The active session's latest snapshot is merged into the chart so live tracking updates without waiting for a manual refresh.
+
+## Attention Heatmap
+
+The dashboard includes an attention heatmap overlay for active sessions.
+
+- Mouse movement is sampled client-side to avoid flooding `/behavior/event`.
+- Clicks are rendered with higher intensity than movement points.
+- The heatmap keeps only the latest bounded point window in memory, so it does not grow unbounded during long sessions.
+- Snapshot polling uses `/behavior/current/{session_id}` instead of fake behavior events, preserving cleaner cognitive-load and task-switch metrics.
+
+## Adaptive UI
+
+The frontend applies the backend adaptation policy to the dashboard layout.
+
+- `minimal` complexity hides secondary panels and advanced visualizations.
+- `normal` complexity keeps the standard dashboard.
+- `advanced` complexity keeps richer panels visible and supports denser layout settings.
+- `sparse`, `normal`, and `dense` density states adjust spacing and card density.
+- `slow`, `normal`, and `fast` pace states adjust UI transition timing.
+
+## Measurement Model
+
+The dashboard is explicit that FlowState is estimating behavior patterns, not reading thoughts or making clinical claims.
+
+- Cognitive load uses typing pace, hesitation variance, correction rate, and focus switches.
+- Frustration uses correction/error signals combined with current load.
+- Attention is treated as steadier interaction with lower load and fewer correction-heavy patterns.
+- Research links in the UI point to affective computing, NASA-TLX workload research, mouse trajectory workload work, and keystroke stress-detection studies.
+
 ## Auth
 
 When enable_auth is true, all HTTP requests require an Authorization header:
@@ -199,6 +244,19 @@ npm run dev                             # runs on localhost:3000
 cd apps/backend
 python -m pytest tests/ -v
 ```
+
+### Frontend verification
+```bash
+cd apps/frontend
+npm run lint
+npm run build
+```
+
+Latest local verification:
+- `python -m pytest tests/ -q`: 140 passed
+- `npm run lint`: passed
+- `npm run build`: passed
+- Playwright smoke check: auth page, mocked heatmap, measurement guide, and minimal/advanced adaptive UI modes rendered without page errors
 
 The default SQLite database file is created at `./flowstate.db` relative to the backend working directory.
 
@@ -318,7 +376,7 @@ apps/
 │   ├── models/           # Pydantic models
 │   ├── services/         # Business logic
 │   └── tests/            # 140 unit + integration tests
-└── frontend/             # Next.js 14 (TypeScript)
+└── frontend/             # Next.js 16 (TypeScript)
     └── src/
         ├── app/          # App Router pages + globals.css
         └── lib/          # API client with JWT management

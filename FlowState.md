@@ -5,7 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
-[![Next.js 14](https://img.shields.io/badge/Next.js-14-black.svg)](https://nextjs.org/)
+[![Next.js 16](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-green.svg)](https://fastapi.tiangolo.com/)
 
 ---
@@ -133,7 +133,7 @@ flowstate/
 ├── docker-compose.prod.yml         # Production overrides
 │
 ├── apps/
-│   ├── frontend/                   # Next.js 14 App Router
+│   ├── frontend/                   # Next.js 16 App Router
 │   │   ├── app/
 │   │   │   ├── layout.tsx
 │   │   │   ├── page.tsx            # Landing / auth gate
@@ -772,9 +772,10 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ### Phase 3 — Adaptive Dashboard (Week 8–10)
 
 - [x] Real-time emotion radar visualization *(Next.js circular gauges + metric cards)*
-- [ ] Stress curve + timeline chart (D3.js)
-- [ ] Attention heatmap overlay
-- [ ] UI complexity adapts (sparse/normal/advanced)
+- [x] Measurement guide + research references *(behavior signal definitions with affective computing, workload, mouse, and keystroke literature links)*
+- [x] Stress curve + timeline chart *(Next.js SVG chart + analytics/intervention playback APIs)*
+- [x] Attention heatmap overlay *(client-side bounded pointer/click map with primary zone and confidence stats)*
+- [x] UI complexity adapts (sparse/normal/advanced) *(frontend applies `/adaptation/config/{session_id}` as data-driven layout states)*
 - [x] Notification gating system *(deliver/queue/suppress with configurable policy)*
 
 ### Phase 4 — RL Agent (Week 11–13)
