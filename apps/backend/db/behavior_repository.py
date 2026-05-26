@@ -13,6 +13,8 @@ from models.behavior import (
     BehaviorSnapshotRecord,
     BehaviorSnapshot,
 )
+from models.assessment import AssessmentResult, InstrumentType
+from models.emotion import EmotionState
 from models.memory import DailySummary, UserBehavioralProfile
 from models.privacy import SensingState
 from models.session import SessionRecord
@@ -156,6 +158,29 @@ class BehaviorRepository:
                         password_hash TEXT NOT NULL,
                         display_name TEXT NOT NULL DEFAULT '',
                         created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS emotion_snapshots (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        state_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS assessments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        instrument_type TEXT NOT NULL,
+                        result_json TEXT NOT NULL,
+                        normalized_score REAL NOT NULL,
+                        completed_at TEXT NOT NULL
                     )
                     """
                 )
@@ -745,6 +770,7 @@ class BehaviorRepository:
                         "behavior_snapshots", "behavior_sessions",
                         "adaptation_feedback", "adaptation_q_values",
                         "adaptation_decisions", "sensing_states",
+                        "emotion_snapshots", "assessments",
                     ]:
                         cursor = conn.execute(
                             f"DELETE FROM {table} WHERE session_id IN ({ph})",
@@ -952,6 +978,138 @@ class BehaviorRepository:
                     (user_id,),
                 ).fetchone()
         return str(row[0]) if row else None
+
+    # ── Emotion Snapshots (Multimodal) ────────────────────────────────────
+
+    def save_emotion_state(self, state: EmotionState) -> None:
+        """Persist a fused multimodal emotion state."""
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO emotion_snapshots(session_id, state_json, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        state.session_id,
+                        json.dumps(state.model_dump(mode="json")),
+                        state.timestamp.isoformat(),
+                    ),
+                )
+                conn.commit()
+
+    def get_emotion_state(self, session_id: str) -> EmotionState | None:
+        """Get the latest emotion state for a session."""
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT state_json FROM emotion_snapshots WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+        if row is None:
+            return None
+        return EmotionState.model_validate(json.loads(str(row[0])))
+
+    def get_emotion_history(
+        self, session_id: str, limit: int = 50, before_id: int | None = None,
+    ) -> tuple[list[EmotionState], bool]:
+        """Return emotion history with pagination."""
+        self._ensure_ready()
+        safe_limit = max(1, min(limit, 500))
+        query = "SELECT id, state_json FROM emotion_snapshots WHERE session_id = ?"
+        params: list[object] = [session_id]
+        if before_id is not None:
+            query += " AND id < ?"
+            params.append(before_id)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(safe_limit + 1)
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                rows = conn.execute(query, tuple(params)).fetchall()
+        has_more = len(rows) > safe_limit
+        rows = rows[:safe_limit]
+        results: list[EmotionState] = []
+        for row in rows:
+            try:
+                results.append(EmotionState.model_validate(json.loads(str(row[1]))))
+            except Exception:
+                continue
+        return results, has_more
+
+    def get_emotion_snapshot_count(self, session_id: str) -> int:
+        """Count emotion snapshots for a session."""
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM emotion_snapshots WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+        return int(row[0]) if row else 0
+
+    # ── Assessments (Psychometric) ────────────────────────────────────────
+
+    def save_assessment(self, result: AssessmentResult) -> None:
+        """Persist a scored assessment result."""
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO assessments(session_id, user_id, instrument_type, result_json, normalized_score, completed_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        result.session_id,
+                        result.user_id,
+                        result.instrument_type.value,
+                        json.dumps(result.model_dump(mode="json")),
+                        result.normalized_score,
+                        result.completed_at.isoformat(),
+                    ),
+                )
+                conn.commit()
+
+    def get_assessments(
+        self,
+        user_id: str,
+        instrument_type: InstrumentType | None = None,
+        limit: int = 50,
+    ) -> list[AssessmentResult]:
+        """Get assessment history for a user, optionally filtered by instrument."""
+        self._ensure_ready()
+        safe_limit = max(1, min(limit, 500))
+        if instrument_type:
+            query = "SELECT result_json FROM assessments WHERE user_id = ? AND instrument_type = ? ORDER BY id DESC LIMIT ?"
+            params: tuple = (user_id, instrument_type.value, safe_limit)
+        else:
+            query = "SELECT result_json FROM assessments WHERE user_id = ? ORDER BY id DESC LIMIT ?"
+            params = (user_id, safe_limit)
+
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                rows = conn.execute(query, params).fetchall()
+
+        results: list[AssessmentResult] = []
+        for row in rows:
+            try:
+                results.append(AssessmentResult.model_validate(json.loads(str(row[0]))))
+            except Exception:
+                continue
+        return results
+
+    def get_assessment_count(self, user_id: str) -> int:
+        """Count all assessments for a user."""
+        self._ensure_ready()
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM assessments WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
+        return int(row[0]) if row else 0
 
     # ── Schema Migrations ────────────────────────────────────────────────
 

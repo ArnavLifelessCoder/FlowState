@@ -1,11 +1,15 @@
 from config import get_settings
 from db.behavior_repository import BehaviorRepository
 from services.analytics_service import AnalyticsService
+from services.assessment_service import AssessmentService
+from services.audio_service import AudioService
 from services.auth_service import AuthService
 from services.adaptation_feedback_service import AdaptationFeedbackService
 from services.adaptation_rl_service import AdaptationRLService
 from services.adaptation_service import AdaptationService
 from services.behavior_session_service import BehaviorSessionService
+from services.emotion_pipeline import EmotionPipeline
+from services.fusion_service import FusionService
 from services.intervention_playback_service import InterventionPlaybackService
 from services.memory_service import MemoryService
 from services.notification_gating_service import NotificationGatingService
@@ -13,6 +17,7 @@ from services.privacy_service import PrivacyService
 from services.realtime_hub import RealtimeHub
 from services.session_management_service import SessionManagementService
 from services.team_analytics_service import TeamAnalyticsService
+from services.vision_service import VisionService
 
 settings = get_settings()
 behavior_repository = BehaviorRepository(settings.database_url)
@@ -44,8 +49,15 @@ notification_gating_service = NotificationGatingService(
 team_analytics_service = TeamAnalyticsService(behavior_repository)
 auth_service = AuthService(behavior_repository)
 
-
-
-
-
-
+# ── Multimodal Emotion Pipeline ───────────────────────────────────
+vision_service = VisionService()
+audio_service = AudioService()
+fusion_service = FusionService()
+emotion_pipeline = EmotionPipeline(
+    repository=behavior_repository,
+    vision_service=vision_service,
+    audio_service=audio_service,
+    fusion_service=fusion_service,
+    behavior_sessions=behavior_sessions,
+)
+assessment_service = AssessmentService(behavior_repository)

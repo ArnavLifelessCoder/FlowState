@@ -39,7 +39,7 @@ interface Session {
 
 interface ActivityItem {
   id: string;
-  type: "session" | "behavior" | "notification" | "auth";
+  type: "session" | "behavior" | "notification" | "auth" | "assessment";
   text: string;
   time: Date;
 }
@@ -247,6 +247,32 @@ function actionTone(action: string | undefined) {
   return "normal";
 }
 
+// ── Multimodal Types ─────────────────────────────────────────────
+
+interface EmotionStateData {
+  session_id: string;
+  emotion: string;
+  confidence: number;
+  stress_level: number;
+  cognitive_load: number;
+  attention_level: number;
+  burnout_risk: number;
+  recommended_adaptation: string;
+  modalities_used: string[];
+  timestamp: string;
+  vision?: { emotion: string; confidence: number; fatigue_score: number; gaze_direction: string; landmarks_detected: boolean } | null;
+  audio?: { stress_level: number; vocal_emotion: string; speaking_tempo: number; pitch_variance: number } | null;
+}
+
+interface ModalityState {
+  vision: boolean;
+  audio: boolean;
+  behavior: boolean;
+}
+
+const CAMERA_CAPTURE_MS = 500;
+const AUDIO_CHUNK_MS = 2000;
+
 const MAX_ATTENTION_POINTS = 120;
 const MOUSE_EVENT_SAMPLE_MS = 250;
 const HEATMAP_SAMPLE_MS = 120;
@@ -372,9 +398,13 @@ export default function Home() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [attentionPoints, setAttentionPoints] = useState<AttentionPoint[]>([]);
   const [backendOnline, setBackendOnline] = useState(false);
+  const [emotionState, setEmotionState] = useState<EmotionStateData | null>(null);
+  const [modalities, setModalities] = useState<ModalityState>({ vision: false, audio: false, behavior: true });
   const trackerRef = useRef<number | null>(null);
   const adaptationRequestRef = useRef(0);
   const adaptationFetchedAtRef = useRef(0);
+  const cameraRef = useRef<{ stream: MediaStream; video: HTMLVideoElement; canvas: HTMLCanvasElement; timer: number } | null>(null);
+  const audioRef = useRef<{ stream: MediaStream; recorder: MediaRecorder; timer: number } | null>(null);
 
   // Check auth on mount
   useEffect(() => {
@@ -436,6 +466,130 @@ export default function Home() {
 
     return () => window.clearTimeout(timer);
   }, [activeSession, snapshot?.session_id, snapshot?.updated_at, snapshot?.recommended_adaptation]);
+
+  // Camera capture — sends JPEG frames to /emotion/infer-frame
+  useEffect(() => {
+    if (!activeSession || !modalities.vision) {
+      if (cameraRef.current) {
+        clearInterval(cameraRef.current.timer);
+        cameraRef.current.stream.getTracks().forEach(t => t.stop());
+        cameraRef.current = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, facingMode: "user" } });
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
+
+        const video = document.createElement("video");
+        video.srcObject = stream;
+        video.muted = true;
+        await video.play();
+
+        const canvas = document.createElement("canvas");
+        canvas.width = 320;
+        canvas.height = 240;
+        const ctx = canvas.getContext("2d")!;
+
+        const timer = window.setInterval(() => {
+          if (!activeSession || cancelled) return;
+          ctx.drawImage(video, 0, 0, 320, 240);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+          const b64 = dataUrl.split(",")[1];
+          if (b64) {
+            api.inferFrame(activeSession, b64)
+              .then((data: EmotionStateData) => {
+                if (data?.session_id === activeSession) setEmotionState(data);
+              })
+              .catch(() => {});
+          }
+        }, CAMERA_CAPTURE_MS);
+
+        cameraRef.current = { stream, video, canvas, timer };
+        addActivity("behavior", "Camera capture started");
+      } catch {
+        addActivity("behavior", "Camera access denied or unavailable");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (cameraRef.current) {
+        clearInterval(cameraRef.current.timer);
+        cameraRef.current.stream.getTracks().forEach(t => t.stop());
+        cameraRef.current = null;
+      }
+    };
+  }, [activeSession, modalities.vision, addActivity]);
+
+  // Audio capture — sends WAV chunks to /emotion/infer-audio
+  useEffect(() => {
+    if (!activeSession || !modalities.audio) {
+      if (audioRef.current) {
+        clearInterval(audioRef.current.timer);
+        audioRef.current.recorder.state !== "inactive" && audioRef.current.recorder.stop();
+        audioRef.current.stream.getTracks().forEach(t => t.stop());
+        audioRef.current = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
+
+        const sendChunk = (blob: Blob) => {
+          if (cancelled || !activeSession) return;
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = reader.result as string;
+            const b64 = result.split(",")[1];
+            if (b64) {
+              api.inferAudio(activeSession, b64)
+                .then((data: EmotionStateData) => {
+                  if (data?.session_id === activeSession) setEmotionState(data);
+                })
+                .catch(() => {});
+            }
+          };
+          reader.readAsDataURL(blob);
+        };
+
+        const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "" });
+        recorder.ondataavailable = (e) => { if (e.data.size > 0) sendChunk(e.data); };
+
+        const timer = window.setInterval(() => {
+          if (recorder.state === "recording") {
+            recorder.stop();
+          }
+          if (!cancelled && recorder.state === "inactive") {
+            recorder.start();
+          }
+        }, AUDIO_CHUNK_MS);
+
+        recorder.start();
+        audioRef.current = { stream, recorder, timer };
+        addActivity("behavior", "Audio capture started");
+      } catch {
+        addActivity("behavior", "Microphone access denied or unavailable");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (audioRef.current) {
+        clearInterval(audioRef.current.timer);
+        if (audioRef.current.recorder.state !== "inactive") audioRef.current.recorder.stop();
+        audioRef.current.stream.getTracks().forEach(t => t.stop());
+        audioRef.current = null;
+      }
+    };
+  }, [activeSession, modalities.audio, addActivity]);
 
   // Behavior tracker - sends keypress events while a session is active
   useEffect(() => {
@@ -612,6 +766,9 @@ export default function Home() {
           <button className={`nav-item ${page === "teams" ? "active" : ""}`} onClick={() => setPage("teams")}>
             <span className="icon">👥</span> Team Analytics
           </button>
+          <button className={`nav-item ${page === "assessments" ? "active" : ""}`} onClick={() => setPage("assessments")}>
+            <span className="icon">📋</span> Assessments
+          </button>
         </nav>
         <div className="sidebar-footer">
           <div className="user-badge">
@@ -632,25 +789,51 @@ export default function Home() {
             snapshot={snapshot} activeSession={activeSession} sessions={sessions}
             activity={activity} backendOnline={backendOnline} attentionPoints={attentionPoints}
             uiConfig={activeUiConfig} adaptationAction={activeAdaptationAction}
+            emotionState={emotionState} modalities={modalities}
             onStartSession={handleStartSession} onEndSession={handleEndSession}
+            onToggleModality={(key) => setModalities(prev => ({ ...prev, [key]: !prev[key] }))}
           />
         )}
         {page === "sessions" && <SessionsPage sessions={sessions} activeSession={activeSession} />}
         {page === "timeline" && <TimelinePage sessions={sessions} activeSession={activeSession} liveSnapshot={snapshot} />}
         {page === "notifications" && <NotificationsPage activeSession={activeSession} addActivity={addActivity} />}
         {page === "teams" && <TeamsPage userId={userId} />}
+        {page === "assessments" && <AssessmentsPage userId={userId} activeSession={activeSession} addActivity={addActivity} />}
       </main>
+
+      {/* Floating Emotion Badge */}
+      {activeSession && emotionState && emotionState.modalities_used.length > 0 && (
+        <div className="emotion-badge" id="emotion-badge">
+          <span className={`badge-pulse ${emotionState.stress_level > 0.6 ? "stressed" : ""}`} />
+          <span className="badge-emoji">
+            {emotionState.emotion === "happy" ? "😊" :
+             emotionState.emotion === "sad" ? "😔" :
+             emotionState.emotion === "angry" ? "😤" :
+             emotionState.emotion === "fear" ? "😰" :
+             emotionState.emotion === "stressed" ? "😓" :
+             emotionState.emotion === "calm" ? "😌" :
+             emotionState.emotion === "surprise" ? "😲" :
+             emotionState.emotion === "frustrated" ? "😫" :
+             emotionState.emotion === "anxious" ? "😟" :
+             emotionState.emotion === "confident" ? "💪" : "😐"}
+          </span>
+          <span className="badge-label">{emotionState.emotion}</span>
+          <span className="badge-confidence">{(emotionState.confidence * 100).toFixed(0)}%</span>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Dashboard Page ───────────────────────────────────────────────
 
-function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnline, attentionPoints, uiConfig, adaptationAction, onStartSession, onEndSession }: {
+function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnline, attentionPoints, uiConfig, adaptationAction, emotionState, modalities, onStartSession, onEndSession, onToggleModality }: {
   snapshot: Snapshot | null; activeSession: string | null; sessions: Session[];
   activity: ActivityItem[]; backendOnline: boolean; attentionPoints: AttentionPoint[];
   uiConfig: UIConfig; adaptationAction: string;
+  emotionState: EmotionStateData | null; modalities: ModalityState;
   onStartSession: () => void; onEndSession: () => void;
+  onToggleModality: (key: keyof ModalityState) => void;
 }) {
   const cog = snapshot?.cognitive_load ?? 0;
   const frust = snapshot?.frustration_score ?? 0;
@@ -707,6 +890,83 @@ function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnl
           <span className="metric-label">Total Sessions</span>
           <span className="metric-value sessions">{sessions.length}</span>
           <div className="metric-bar"><div className="metric-bar-fill" style={{ width: `${Math.min(sessions.length * 10, 100)}%`, background: "var(--accent-warning)" }} /></div>
+        </div>
+      </div>
+
+      {/* Multimodal Emotion + Modality Controls */}
+      <div className="dashboard-grid">
+        <div className="card emotion-radar-card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Emotion Radar</div>
+              <div className="card-subtitle">
+                {emotionState?.modalities_used?.length
+                  ? `Active: ${emotionState.modalities_used.join(", ")}`
+                  : "Enable modalities to start multimodal sensing"}
+              </div>
+            </div>
+            {emotionState && (
+              <span className={`status-badge ${emotionState.stress_level > 0.6 ? "suppress" : emotionState.stress_level > 0.35 ? "queue" : "active"}`}>
+                <span className="status-dot" />
+                {emotionState.emotion}
+              </span>
+            )}
+          </div>
+          <EmotionRadar emotionState={emotionState} />
+        </div>
+
+        <div className="card modality-card">
+          <div className="card-header">
+            <div className="card-title">Sensing Modalities</div>
+          </div>
+          <div className="modality-controls">
+            <button
+              className={`modality-toggle ${modalities.vision ? "active" : ""}`}
+              onClick={() => onToggleModality("vision")}
+              disabled={!activeSession}
+              title="Toggle camera capture"
+            >
+              <span className="modality-icon">📷</span>
+              <span className="modality-label">Vision</span>
+              <span className={`modality-status ${modalities.vision ? "on" : "off"}`}>
+                {modalities.vision ? "ON" : "OFF"}
+              </span>
+            </button>
+            <button
+              className={`modality-toggle ${modalities.audio ? "active" : ""}`}
+              onClick={() => onToggleModality("audio")}
+              disabled={!activeSession}
+              title="Toggle microphone capture"
+            >
+              <span className="modality-icon">🎤</span>
+              <span className="modality-label">Audio</span>
+              <span className={`modality-status ${modalities.audio ? "on" : "off"}`}>
+                {modalities.audio ? "ON" : "OFF"}
+              </span>
+            </button>
+            <button
+              className={`modality-toggle ${modalities.behavior ? "active" : ""}`}
+              onClick={() => onToggleModality("behavior")}
+              disabled={!activeSession}
+              title="Toggle keyboard/mouse tracking"
+            >
+              <span className="modality-icon">⌨️</span>
+              <span className="modality-label">Behavior</span>
+              <span className={`modality-status ${modalities.behavior ? "on" : "off"}`}>
+                {modalities.behavior ? "ON" : "OFF"}
+              </span>
+            </button>
+          </div>
+          {emotionState && (
+            <div className="emotion-detail-grid">
+              <div><span>Stress</span><strong>{(emotionState.stress_level * 100).toFixed(0)}%</strong></div>
+              <div><span>Burnout Risk</span><strong>{(emotionState.burnout_risk * 100).toFixed(0)}%</strong></div>
+              <div><span>Confidence</span><strong>{(emotionState.confidence * 100).toFixed(0)}%</strong></div>
+              {emotionState.vision && <div><span>Gaze</span><strong>{emotionState.vision.gaze_direction}</strong></div>}
+              {emotionState.audio && <div><span>Vocal</span><strong>{emotionState.audio.vocal_emotion}</strong></div>}
+              {emotionState.audio && <div><span>Tempo</span><strong>{emotionState.audio.speaking_tempo.toFixed(0)} WPM</strong></div>}
+            </div>
+          )}
         </div>
       </div>
 
@@ -792,6 +1052,88 @@ function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnl
         </div>
       </div>
     </>
+  );
+}
+
+// ── Emotion Radar ────────────────────────────────────────────────
+
+function EmotionRadar({ emotionState }: { emotionState: EmotionStateData | null }) {
+  const metrics = useMemo(() => {
+    if (!emotionState) return [0, 0, 0, 0, 0];
+    return [
+      emotionState.stress_level,
+      emotionState.cognitive_load,
+      1 - emotionState.attention_level, // invert so higher = worse
+      emotionState.burnout_risk,
+      1 - emotionState.confidence, // invert so higher = worse
+    ];
+  }, [emotionState]);
+
+  const labels = ["Stress", "Load", "Distraction", "Burnout", "Uncertainty"];
+  const size = 220;
+  const cx = size / 2;
+  const cy = size / 2;
+  const maxR = 85;
+  const levels = [0.25, 0.5, 0.75, 1.0];
+
+  const angleStep = (2 * Math.PI) / 5;
+  const startAngle = -Math.PI / 2;
+
+  const point = (index: number, value: number) => {
+    const angle = startAngle + index * angleStep;
+    return {
+      x: cx + Math.cos(angle) * maxR * value,
+      y: cy + Math.sin(angle) * maxR * value,
+    };
+  };
+
+  const polygonPoints = metrics.map((v, i) => point(i, v)).map(p => `${p.x},${p.y}`).join(" ");
+
+  if (!emotionState || emotionState.modalities_used.length === 0) {
+    return (
+      <div className="empty-state" style={{ padding: "40px 20px" }}>
+        <div className="icon">🎯</div>
+        <p>Enable vision or audio modalities to see the emotion radar</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="emotion-radar-wrap">
+      <svg viewBox={`0 0 ${size} ${size}`} className="emotion-radar-svg">
+        {/* Grid rings */}
+        {levels.map(level => (
+          <polygon
+            key={level}
+            className="radar-ring"
+            points={Array.from({ length: 5 }, (_, i) => point(i, level))
+              .map(p => `${p.x},${p.y}`)
+              .join(" ")}
+          />
+        ))}
+        {/* Axes */}
+        {Array.from({ length: 5 }, (_, i) => {
+          const p = point(i, 1);
+          return <line key={i} className="radar-axis" x1={cx} y1={cy} x2={p.x} y2={p.y} />;
+        })}
+        {/* Data polygon */}
+        <polygon className="radar-data" points={polygonPoints} />
+        {/* Data dots */}
+        {metrics.map((v, i) => {
+          const p = point(i, v);
+          return <circle key={i} className="radar-dot" cx={p.x} cy={p.y} r={3.5} />;
+        })}
+        {/* Labels */}
+        {labels.map((label, i) => {
+          const p = point(i, 1.22);
+          return (
+            <text key={label} className="radar-label" x={p.x} y={p.y} textAnchor="middle" dominantBaseline="middle">
+              {label}
+            </text>
+          );
+        })}
+      </svg>
+    </div>
   );
 }
 
@@ -1303,6 +1645,349 @@ function TeamsPage({ userId }: { userId: string }) {
           )}
         </div>
       </div>
+    </>
+  );
+}
+
+// ── Assessments Page ─────────────────────────────────────────────
+
+interface InstrumentSummary {
+  type: string;
+  name: string;
+  description: string;
+  estimated_seconds: number;
+  question_count: number;
+  research_basis: string;
+}
+
+interface InstrumentQuestion {
+  id: string;
+  text: string;
+  subscale: string;
+  min_value: number;
+  max_value: number;
+  reverse_scored: boolean;
+  anchor_low: string;
+  anchor_high: string;
+}
+
+interface InstrumentFull {
+  instrument_type: string;
+  name: string;
+  description: string;
+  estimated_seconds: number;
+  questions: InstrumentQuestion[];
+  scoring_method: string;
+  research_basis: string;
+}
+
+interface AssessmentResultData {
+  instrument_type: string;
+  instrument_name: string;
+  overall_score: number;
+  normalized_score: number;
+  severity: string;
+  interpretation: string;
+  recommendation: string;
+  completed_at: string;
+  subscale_scores: { name: string; raw_score: number; normalized: number; interpretation: string }[];
+}
+
+interface WellbeingData {
+  user_id: string;
+  sensor_stress: number | null;
+  sensor_cognitive_load: number | null;
+  sensor_attention: number | null;
+  self_report_stress: number | null;
+  self_report_energy: number | null;
+  self_report_flow: number | null;
+  self_report_burnout: number | null;
+  calibration_delta: number | null;
+  composite_wellbeing: number;
+}
+
+function AssessmentsPage({ userId, activeSession, addActivity }: {
+  userId: string | null; activeSession: string | null;
+  addActivity: (type: ActivityItem["type"], text: string) => void;
+}) {
+  const [instruments, setInstruments] = useState<InstrumentSummary[]>([]);
+  const [activeInstrument, setActiveInstrument] = useState<InstrumentFull | null>(null);
+  const [responses, setResponses] = useState<Record<string, number>>({});
+  const [currentQ, setCurrentQ] = useState(0);
+  const [result, setResult] = useState<AssessmentResultData | null>(null);
+  const [history, setHistory] = useState<AssessmentResultData[]>([]);
+  const [wellbeing, setWellbeing] = useState<WellbeingData | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    api.listInstruments().then((data: { instruments: InstrumentSummary[] }) => setInstruments(data.instruments || [])).catch(() => {});
+    if (userId) {
+      api.getAssessmentHistory(userId, undefined, 20).then((data: { assessments: AssessmentResultData[] }) => setHistory(data?.assessments || [])).catch(() => {});
+      api.getWellbeing(userId, activeSession || undefined).then((data: WellbeingData) => setWellbeing(data)).catch(() => {});
+    }
+  }, [userId, activeSession]);
+
+  const startAssessment = async (type: string) => {
+    const data = await api.getInstrument(type);
+    setActiveInstrument(data);
+    setResponses({});
+    setCurrentQ(0);
+    setResult(null);
+  };
+
+  const handleResponse = (qid: string, value: number) => {
+    setResponses(prev => ({ ...prev, [qid]: value }));
+  };
+
+  const submitAssessment = async () => {
+    if (!activeInstrument || !userId) return;
+    setSubmitting(true);
+    try {
+      const data = await api.submitAssessment(
+        activeSession || "no-session",
+        userId,
+        activeInstrument.instrument_type,
+        responses,
+      );
+      if (data.error) {
+        addActivity("assessment", `Error: ${data.error}`);
+      } else {
+        setResult(data);
+        addActivity("assessment", `Completed ${activeInstrument.name}: ${data.severity} severity`);
+        // Refresh history and wellbeing
+        api.getAssessmentHistory(userId, undefined, 20).then((d: { assessments: AssessmentResultData[] }) => setHistory(d?.assessments || [])).catch(() => {});
+        api.getWellbeing(userId, activeSession || undefined).then((d: WellbeingData) => setWellbeing(d)).catch(() => {});
+      }
+    } catch {
+      addActivity("assessment", "Failed to submit assessment");
+    }
+    setSubmitting(false);
+  };
+
+  const q = activeInstrument?.questions[currentQ];
+  const allAnswered = activeInstrument ? activeInstrument.questions.every(q2 => q2.id in responses) : false;
+  const progress = activeInstrument ? (Object.keys(responses).length / activeInstrument.questions.length) * 100 : 0;
+
+  const severityColor = (s: string) =>
+    s === "low" ? "var(--accent-success)" :
+    s === "moderate" ? "var(--accent-warning)" :
+    s === "high" ? "var(--accent-danger)" :
+    "#ff4444";
+
+  const instrumentEmoji = (type: string) =>
+    type === "nasa_tlx" ? "🧠" :
+    type === "pss4" ? "😰" :
+    type === "flow_short" ? "🌊" :
+    type === "burnout_micro" ? "🔥" :
+    type === "mood_check" ? "🎭" : "📋";
+
+  return (
+    <>
+      <div className="dashboard-header">
+        <div>
+          <h2>Psychometric Assessments</h2>
+          <p style={{ color: "var(--text-secondary)", fontSize: 13, marginTop: 4 }}>
+            Take validated assessments to calibrate sensing accuracy and track your wellbeing over time
+          </p>
+        </div>
+      </div>
+
+      {/* Active assessment flow */}
+      {activeInstrument && !result && (
+        <div className="card assessment-card" style={{ marginBottom: 24 }}>
+          <div className="card-header">
+            <div>
+              <div className="card-title">{instrumentEmoji(activeInstrument.instrument_type)} {activeInstrument.name}</div>
+              <div className="card-subtitle">Question {currentQ + 1} of {activeInstrument.questions.length}</div>
+            </div>
+            <button className="btn btn-small" onClick={() => { setActiveInstrument(null); setResult(null); }}>✕ Cancel</button>
+          </div>
+
+          {/* Progress bar */}
+          <div className="metric-bar" style={{ marginBottom: 20 }}>
+            <div className="metric-bar-fill cognitive" style={{ width: `${progress}%`, transition: "width 0.3s ease" }} />
+          </div>
+
+          {q && (
+            <div className="assessment-question">
+              <p className="question-text">{q.text}</p>
+              <div className="question-anchors">
+                <span>{q.anchor_low}</span>
+                <span>{q.anchor_high}</span>
+              </div>
+              <div className="question-scale">
+                {Array.from({ length: q.max_value - q.min_value + 1 }, (_, i) => q.min_value + i).map(val => (
+                  <button
+                    key={val}
+                    className={`scale-btn ${responses[q.id] === val ? "selected" : ""}`}
+                    onClick={() => {
+                      handleResponse(q.id, val);
+                      // Auto-advance after short delay
+                      if (currentQ < activeInstrument.questions.length - 1) {
+                        setTimeout(() => setCurrentQ(prev => prev + 1), 300);
+                      }
+                    }}
+                  >
+                    {val}
+                  </button>
+                ))}
+              </div>
+              <div className="question-nav">
+                <button className="btn btn-small" onClick={() => setCurrentQ(Math.max(0, currentQ - 1))} disabled={currentQ === 0}>← Previous</button>
+                {currentQ < activeInstrument.questions.length - 1 ? (
+                  <button className="btn btn-small" onClick={() => setCurrentQ(currentQ + 1)} disabled={!responses[q.id]}>Next →</button>
+                ) : (
+                  <button className="btn btn-primary" onClick={submitAssessment} disabled={!allAnswered || submitting}>
+                    {submitting ? "Scoring..." : "Submit Assessment"}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Assessment result */}
+      {result && (
+        <div className="card assessment-result" style={{ marginBottom: 24 }}>
+          <div className="card-header">
+            <div>
+              <div className="card-title">{instrumentEmoji(result.instrument_type)} {result.instrument_name} — Results</div>
+              <div className="card-subtitle">{result.interpretation}</div>
+            </div>
+            <span className="status-badge" style={{ background: `${severityColor(result.severity)}22`, color: severityColor(result.severity) }}>
+              {result.severity.toUpperCase()}
+            </span>
+          </div>
+
+          <div className="result-overview">
+            <div className="result-score">
+              <div className="score-circle" style={{ borderColor: severityColor(result.severity) }}>
+                {(result.normalized_score * 100).toFixed(0)}
+              </div>
+              <span>Overall Score</span>
+            </div>
+            <div className="result-recommendation">
+              <strong>Recommendation</strong>
+              <p>{result.recommendation}</p>
+            </div>
+          </div>
+
+          <div className="subscale-grid">
+            {result.subscale_scores.map(sub => (
+              <div key={sub.name} className="subscale-item">
+                <div className="subscale-header">
+                  <span>{sub.name.replace(/_/g, " ")}</span>
+                  <strong>{(sub.normalized * 100).toFixed(0)}%</strong>
+                </div>
+                <div className="metric-bar">
+                  <div className="metric-bar-fill" style={{
+                    width: `${sub.normalized * 100}%`,
+                    background: sub.normalized > 0.7 ? "var(--gradient-danger)" :
+                                sub.normalized > 0.4 ? "var(--accent-warning)" : "var(--gradient-success)",
+                  }} />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button className="btn" onClick={() => { setActiveInstrument(null); setResult(null); }} style={{ marginTop: 16 }}>
+            ← Back to Instruments
+          </button>
+        </div>
+      )}
+
+      {/* Instrument catalog + Wellbeing + History (only when not actively taking one) */}
+      {!activeInstrument && (
+        <>
+          {/* Wellbeing snapshot */}
+          {wellbeing && (
+            <div className="card" style={{ marginBottom: 24 }}>
+              <div className="card-header">
+                <div className="card-title">Composite Wellbeing</div>
+                <span className="status-badge active">
+                  <span className="status-dot" />
+                  {(wellbeing.composite_wellbeing * 100).toFixed(0)}%
+                </span>
+              </div>
+              <div className="wellbeing-grid">
+                {wellbeing.sensor_stress !== null && (
+                  <div><span>Sensor Stress</span><strong>{(wellbeing.sensor_stress * 100).toFixed(0)}%</strong></div>
+                )}
+                {wellbeing.self_report_stress !== null && (
+                  <div><span>Self-Report Stress</span><strong>{(wellbeing.self_report_stress * 100).toFixed(0)}%</strong></div>
+                )}
+                {wellbeing.calibration_delta !== null && (
+                  <div><span>Calibration Δ</span><strong style={{ color: Math.abs(wellbeing.calibration_delta) > 0.2 ? "var(--accent-warning)" : "var(--accent-success)" }}>
+                    {wellbeing.calibration_delta > 0 ? "+" : ""}{(wellbeing.calibration_delta * 100).toFixed(0)}%
+                  </strong></div>
+                )}
+                {wellbeing.self_report_energy !== null && (
+                  <div><span>Energy</span><strong>{(wellbeing.self_report_energy * 100).toFixed(0)}%</strong></div>
+                )}
+                {wellbeing.self_report_flow !== null && (
+                  <div><span>Flow</span><strong>{(wellbeing.self_report_flow * 100).toFixed(0)}%</strong></div>
+                )}
+                {wellbeing.self_report_burnout !== null && (
+                  <div><span>Burnout Risk</span><strong>{(wellbeing.self_report_burnout * 100).toFixed(0)}%</strong></div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="dashboard-grid">
+            {/* Instrument catalog */}
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">Available Assessments</div>
+              </div>
+              <div className="instrument-list">
+                {instruments.map(inst => (
+                  <button key={inst.type} className="instrument-item" onClick={() => startAssessment(inst.type)} disabled={!userId}>
+                    <div className="instrument-emoji">{instrumentEmoji(inst.type)}</div>
+                    <div className="instrument-info">
+                      <div className="instrument-name">{inst.name}</div>
+                      <div className="instrument-desc">{inst.description}</div>
+                      <div className="instrument-meta">
+                        {inst.question_count} questions · ~{inst.estimated_seconds}s
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Assessment history */}
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">Recent Assessments</div>
+              </div>
+              {history.length > 0 ? (
+                <div className="assessment-history-list">
+                  {history.map((r, i) => (
+                    <div key={i} className="history-item">
+                      <span className="history-emoji">{instrumentEmoji(r.instrument_type)}</span>
+                      <div className="history-info">
+                        <div className="history-name">{r.instrument_name}</div>
+                        <div className="history-time">{new Date(r.completed_at).toLocaleDateString()} {new Date(r.completed_at).toLocaleTimeString()}</div>
+                      </div>
+                      <div className="history-score">
+                        <strong style={{ color: severityColor(r.severity) }}>{(r.normalized_score * 100).toFixed(0)}%</strong>
+                        <span className="history-severity" style={{ color: severityColor(r.severity) }}>{r.severity}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <div className="icon">📋</div>
+                  <p>No assessments taken yet</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }

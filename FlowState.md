@@ -756,18 +756,20 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 
 ### Phase 1 — First Working Signal (Week 3–4)
 
-- [ ] Behavior-only emotion inference (no camera/mic yet)
-- [ ] Frontend emotion badge (shows stress/cognitive load)
+- [x] Behavior-only emotion inference (no camera/mic yet) *(heuristic behavior metrics feeding fusion service)*
+- [x] Frontend emotion badge (shows stress/cognitive load) *(floating glassmorphism EmotionBadge with animated pulse)*
 - [x] First adaptive UI response (reduce complexity on high stress) *(backend policy + `/api/v1/adaptation/config/{session_id}`)*
-- [ ] Emotion history stored to Postgres
+- [x] Emotion history stored to Postgres *(SQLite emotion_snapshots table with paginated history API)*
 
 ### Phase 2 — Vision + Audio (Week 5–7)
 
-- [ ] Camera capture hook + frame sender
-- [ ] Vision pipeline (MediaPipe + face emotion classifier)
-- [ ] Audio capture + chunked sender
-- [ ] Audio pipeline (MFCC features + Wav2Vec2)
-- [ ] Fusion of all three modalities
+- [x] Camera capture hook + frame sender *(getUserMedia + 500ms JPEG frame capture)*
+- [x] Vision pipeline (MediaPipe + face emotion classifier) *(heuristic stub, swappable for MediaPipe + HuggingFace)*
+- [x] Audio capture hook + chunked sender *(MediaRecorder + 2s WAV chunk capture)*
+- [x] Audio pipeline (MFCC features + Wav2Vec2) *(heuristic stub, swappable for Wav2Vec2)*
+- [x] Fusion of all three modalities *(weighted late fusion with auto-weight redistribution)*
+- [x] Psychometric assessments — 5 validated instruments *(NASA-TLX, PSS-4, Flow Short Scale, Burnout Micro, Mood Check)*
+- [x] Sensor vs self-report calibration *(composite wellbeing snapshot with calibration delta)*
 
 ### Phase 3 — Adaptive Dashboard (Week 8–10)
 

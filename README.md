@@ -19,6 +19,13 @@ FlowState consists of a **FastAPI backend** (Python) and a **Next.js 16 dashboar
 - **Enterprise Team Analytics** — anonymized aggregate metrics, burnout risk detection, stress hotspots.
 - **GDPR Privacy** — full data export, cascading deletion, and sensing pause/resume controls.
 - **Schema Migrations** — versioned migration tracking for forward-compatible DB evolution.
+- **Multimodal Emotion Pipeline** — orchestrates vision (camera), audio (microphone), and behavior modalities with weighted late fusion.
+- **Vision Service** — processes base64 JPEG frames for face emotion classification and gaze direction detection.
+- **Audio Service** — processes base64 WAV chunks for vocal stress, emotion, speaking tempo, and pitch variance.
+- **Fusion Service** — combines vision, audio, and behavior signals with configurable weights and automatic weight redistribution for missing modalities.
+- **Emotion Snapshots** — persistent storage for fused multimodal emotion states with paginated history.
+- **Psychometric Assessments** — 5 validated instruments (NASA-TLX, PSS-4, Flow Short Scale, Burnout Micro, Mood Check) with scoring, trend analysis, and composite wellbeing snapshots.
+- **Sensor Calibration** — compares real-time sensor estimates with self-reported ground truth to compute calibration deltas.
 
 ### Frontend (Next.js 16 + TypeScript)
 - **Auth pages** — register/login with JWT token management and auto-refresh.
@@ -35,6 +42,13 @@ FlowState consists of a **FastAPI backend** (Python) and a **Next.js 16 dashboar
 - **Session history** — table with status badges, timestamps, and platform info.
 - **Activity feed** — real-time log of user actions.
 - **Design system** — dark glassmorphism theme with Inter font, gradient accents, and micro-animations.
+- **Camera Capture** — webcam access with frame capture every 500ms, sent as base64 JPEG for vision inference.
+- **Audio Capture** — microphone access with 2s WAV chunk recording via MediaRecorder API.
+- **Emotion Radar** — SVG pentagon chart visualizing stress, cognitive load, distraction, burnout risk, and uncertainty in real-time.
+- **Modality Controls** — toggle buttons for enabling/disabling vision (camera), audio (mic), and behavior (keyboard/mouse) sensing.
+- **Floating Emotion Badge** — glassmorphism floating indicator showing current emotion with emoji, label, confidence, and animated pulse.
+- **Assessment Page** — full interactive assessment-taking flow with question stepper, animated scale buttons, result display with score circle, subscale breakdowns, assessment history, and composite wellbeing dashboard.
+- **Wellbeing Calibration** — shows delta between sensor estimates and self-report to validate sensing accuracy over time.
 
 ## Architecture flow
 
@@ -45,6 +59,12 @@ RealtimeHub publishes updates ->
 Adaptation policy returns UI configuration ->
 Analytics reads history and aggregates insights ->
 MemoryService builds long-term behavioral profiles and generates proactive suggestions
+
+Multimodal pipeline (Phase 2):
+Camera frame / Audio chunk -> VisionService / AudioService inference ->
+FusionService combines with BehaviorSnapshot ->
+EmotionState persisted in emotion_snapshots table ->
+Frontend displays on EmotionRadar + floating EmotionBadge
 
 Frontend behavior tracking samples mouse movement before sending it to the backend, records bounded client-side attention points for the heatmap, and polls current snapshots without injecting synthetic behavior into the model.
 
@@ -107,6 +127,20 @@ Team Analytics
 - GET /teams: list all teams.
 - GET /teams/{team_id}: get anonymized aggregate analytics for a team.
 - DELETE /teams/{team_id}: delete a team.
+
+Emotion (Multimodal)
+- POST /emotion/infer-frame: process a camera frame (base64 JPEG) and return fused EmotionState.
+- POST /emotion/infer-audio: process an audio chunk (base64 WAV) and return fused EmotionState.
+- GET /emotion/current/{session_id}: get the latest fused emotion state for a session.
+- GET /emotion/history/{session_id}: get paginated multimodal emotion history.
+
+Assessments (Psychometric)
+- GET /assessments/instruments: list all available psychometric instruments.
+- GET /assessments/instruments/{instrument_type}: get full instrument definition with all questions.
+- POST /assessments/submit: submit assessment responses and receive scored result with severity classification.
+- GET /assessments/history/{user_id}: get assessment history, optionally filtered by instrument.
+- GET /assessments/trend/{user_id}/{instrument_type}: get trend analysis for a specific instrument.
+- GET /assessments/wellbeing/{user_id}: get composite wellbeing snapshot combining sensors + self-report.
 
 Other
 - GET /health: service status and SQLite connectivity.
@@ -288,6 +322,8 @@ SQLite tables:
 - user_behavioral_profiles
 - session_daily_summaries
 - sensing_states
+- emotion_snapshots
+- assessments
 - users
 - schema_migrations
 
@@ -370,12 +406,16 @@ The `schema_migrations` table tracks applied migration versions. `BehaviorReposi
 ```
 apps/
 ├── backend/              # FastAPI + SQLite
-│   ├── api/v1/           # REST endpoints (auth, session, behavior, etc.)
+│   ├── api/v1/           # REST endpoints (auth, session, behavior, emotion, etc.)
 │   ├── core/             # Auth middleware, request logging
 │   ├── db/               # BehaviorRepository (SQLite)
-│   ├── models/           # Pydantic models
+│   ├── models/           # Pydantic models (behavior, emotion, memory, etc.)
 │   ├── services/         # Business logic
-│   └── tests/            # 140 unit + integration tests
+│   │   ├── vision_service.py     # Camera frame → face emotion + gaze
+│   │   ├── audio_service.py      # Audio chunk → vocal stress + emotion
+│   │   ├── fusion_service.py     # Weighted multimodal late fusion
+│   │   └── emotion_pipeline.py   # Orchestrator for all modalities
+│   └── tests/            # 160+ unit + integration tests
 └── frontend/             # Next.js 16 (TypeScript)
     └── src/
         ├── app/          # App Router pages + globals.css
@@ -385,3 +425,5 @@ apps/
 ## Notes
 
 The behavior metrics and adaptation policy are heuristic and intended as a baseline. The RL service updates Q-values based on feedback rewards stored in SQLite. The behavioral memory system builds long-term profiles from accumulated snapshot history and generates proactive suggestions based on detected patterns. CORS is pre-configured for localhost:3000 (Next.js dev server).
+
+The multimodal emotion pipeline uses heuristic classifiers as drop-in stubs for production ML models. To swap in real models, replace `_classify_frame` (in VisionService) with a HuggingFace pipeline (e.g. `dima806/facial_emotions_image_detection` + MediaPipe face mesh) and `_classify_chunk` (in AudioService) with a Wav2Vec2 pipeline. The fusion service supports configurable per-modality weights and automatically redistributes weights when modalities are missing.

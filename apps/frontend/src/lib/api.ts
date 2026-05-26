@@ -226,6 +226,76 @@ class FlowStateAPI {
     return res.json();
   }
 
+  // Emotion (Multimodal)
+  async inferFrame(sessionId: string, frameB64: string) {
+    const res = await this.request("/emotion/infer-frame", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, frame_b64: frameB64 }),
+    });
+    return res.json();
+  }
+
+  async inferAudio(sessionId: string, audioB64: string, sampleRate = 16000, durationMs = 2000) {
+    const res = await this.request("/emotion/infer-audio", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: sessionId,
+        audio_b64: audioB64,
+        sample_rate: sampleRate,
+        duration_ms: durationMs,
+      }),
+    });
+    return res.json();
+  }
+
+  async getEmotionCurrent(sessionId: string) {
+    const res = await this.request(`/emotion/current/${sessionId}`);
+    return res.ok ? res.json() : null;
+  }
+
+  async getMultimodalEmotionHistory(sessionId: string, limit = 50) {
+    const safeLimit = Math.max(1, Math.min(limit, 500));
+    const res = await this.request(`/emotion/history/${sessionId}?limit=${safeLimit}`);
+    return res.ok ? res.json() : null;
+  }
+
+  // Assessments (Psychometric)
+  async listInstruments() {
+    const res = await this.request("/assessments/instruments");
+    return res.json();
+  }
+
+  async getInstrument(instrumentType: string) {
+    const res = await this.request(`/assessments/instruments/${instrumentType}`);
+    return res.json();
+  }
+
+  async submitAssessment(sessionId: string, userId: string, instrumentType: string, responses: Record<string, number>) {
+    const res = await this.request("/assessments/submit", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, user_id: userId, instrument_type: instrumentType, responses }),
+    });
+    return res.json();
+  }
+
+  async getAssessmentHistory(userId: string, instrumentType?: string, limit = 50) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (instrumentType) params.set("instrument_type", instrumentType);
+    const res = await this.request(`/assessments/history/${userId}?${params}`);
+    return res.ok ? res.json() : null;
+  }
+
+  async getAssessmentTrend(userId: string, instrumentType: string) {
+    const res = await this.request(`/assessments/trend/${userId}/${instrumentType}`);
+    return res.ok ? res.json() : null;
+  }
+
+  async getWellbeing(userId: string, sessionId?: string) {
+    const params = sessionId ? `?session_id=${sessionId}` : "";
+    const res = await this.request(`/assessments/wellbeing/${userId}${params}`);
+    return res.ok ? res.json() : null;
+  }
+
   // Privacy
   async exportUserData(userId: string) {
     const res = await this.request(`/privacy/export/${userId}`);
