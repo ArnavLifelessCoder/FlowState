@@ -7,15 +7,15 @@ services:
     rootDir: apps/backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    # Render Disk keeps SQLite data across deploys (requires paid plan).
-    # Remove the `disk` block if you are on the free tier (data resets on redeploy).
-    disk:
-      name: flowstate-db
-      mountPath: /data
-      sizeGB: 1
+    # Uncomment the disk block below to persist SQLite data across deploys (paid plan only).
+    # Without it, the DB resets on every redeploy (fine for dev/demo).
+    # disk:
+    #   name: flowstate-db
+    #   mountPath: /data
+    #   sizeGB: 1
     envVars:
       - key: DATABASE_URL
-        value: sqlite:////data/flowstate.db
+        value: sqlite:///./flowstate.db
       - key: ENVIRONMENT
         value: production
       - key: LOG_LEVEL
