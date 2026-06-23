@@ -4,6 +4,9 @@
 
 FlowState consists of a **FastAPI backend** (Python) and a **Next.js 16 dashboard** (TypeScript) that together provide behavior tracking, emotion inference, adaptive UI recommendations, notification gating, team analytics, and GDPR-compliant privacy controls.
 
+Frontend - https://flowstate-frontend-cr3u.onrender.com/
+Backend - https://flowstate-backend-phco.onrender.com
+
 ## What is implemented
 
 ### Backend (FastAPI + SQLite)
