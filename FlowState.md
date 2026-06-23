@@ -1,4 +1,4 @@
-# 🧠 FlowState
+# FlowState
 
 > **Real-Time Emotionally Adaptive AI Platform**
 > A production-grade multimodal AI platform that dynamically adapts digital experiences based on emotional state, cognitive load, and behavioral signals — built entirely on free-tier infrastructure.
@@ -10,7 +10,7 @@
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [What Is FlowState](#what-is-flowstate)
 - [How It Works](#how-it-works)
@@ -60,11 +60,13 @@ UI complexity, assistant tone, notification density, recommendation pacing, educ
 User Inputs (camera, mic, keyboard, mouse)
         ↓
 Multimodal Processing Engine
-  ├── Vision Model (facial/gaze/fatigue)
-  ├── Audio Model (stress/tone/rhythm)
-  └── Behavior Model (typing/cursor/latency)
+  ├── Vision Service (real image stats → fatigue/gaze; optional ONNX FER model → emotion)
+  ├── Audio Service  (real PCM-WAV DSP → vocal stress/tempo/pitch)
+  └── Behavior Service (typing/cursor/latency)
         ↓
-Emotion + Cognitive Load Estimation
+Fusion Service (weighted late fusion)
+        ↓
+Emotion Smoother (EMA + label hysteresis → stable signal, trend, stability)
         ↓
 Reinforcement Learning Adaptation Engine
         ↓
@@ -73,7 +75,8 @@ UI & Assistant Adaptation Layer
 Frontend Experience (Next.js)
 ```
 
-All inference runs in under **100ms**. All UI adaptation fires in under **200ms**.
+Per-frame inference is fast and CPU-only. The Emotion Smoother stabilizes the
+stream so the displayed mood/stress does not flicker between frames.
 
 ---
 
@@ -200,12 +203,15 @@ flowstate/
 │       │
 │       ├── services/
 │       │   ├── emotion_pipeline.py     # Orchestrates all modalities
-│       │   ├── vision_service.py       # Camera frame → face emotion
-│       │   ├── audio_service.py        # Audio chunk → vocal emotion
+│       │   ├── vision_service.py       # Frame → fatigue/gaze (+ optional ONNX emotion)
+│       │   ├── vision_signal.py        # Real image-feature classifier (NumPy/Pillow)
+│       │   ├── audio_service.py        # PCM WAV chunk → vocal stress/emotion
+│       │   ├── audio_signal.py         # Real DSP classifier (RMS/ZCR/envelope/onsets)
+│       │   ├── onnx_emotion.py         # Optional ONNX facial-emotion model adapter
+│       │   ├── emotion_smoother.py     # EMA + label hysteresis (stable mood stream)
 │       │   ├── behavior_service.py     # UI events → behavior state
 │       │   ├── fusion_service.py       # Combines all modalities
-│       │   ├── adaptation_engine.py    # RL-based adaptation decisions
-│       │   ├── assistant_service.py    # LLM tone + response shaping
+│       │   ├── adaptation_rl_service.py # Q-learning adaptation decisions
 │       │   └── memory_service.py       # Long-term behavioral memory
 │       │
 │       ├── models/
@@ -291,71 +297,61 @@ flowstate/
 
 ## AI/ML Architecture
 
+> **Implementation status.** The pipeline is layered so the signal is honest at
+> every tier and runs with no heavy dependencies by default (NumPy + Pillow):
+> a **signal classifier** recovers what is genuinely derivable from the raw
+> input, an **optional ONNX model** adds trained facial-emotion classification,
+> and a **heuristic fallback** guarantees the service never hard-fails. The
+> richer signals in the tables above (microexpressions, blink rate, etc.) are
+> the product vision; the sections below describe what ships today.
+
 ### 1. Vision Pipeline
 
-**Input:** JPEG frame from browser webcam (captured every 500ms)  
-**Output:** `{ emotion, confidence, fatigue_score, gaze_direction }`
+**Input:** JPEG frame from browser webcam (captured every 500ms)
+**Output:** `{ emotion, confidence, fatigue_score, gaze_direction, landmarks_detected }`
+
+The default classifier (`services/vision_signal.py`) decodes the frame and
+computes real image statistics — mean brightness, contrast, Laplacian sharpness
+(a focus measure), and the brightness centroid — and maps them to **fatigue**,
+**gaze direction**, and **face presence**. It deliberately does *not* fabricate
+a facial emotion from raw pixels; without a trained model it reports `neutral`
+with honest, exposure-based confidence.
+
+An optional trained model (`services/onnx_emotion.py`) supplies the emotion
+label/confidence, layered over the signal classifier's fatigue/gaze. It runs
+locally via ONNX Runtime — no API key, no hosted inference, no per-call cost —
+and auto-detects FER+ (8-class, raw 0–255 input) vs FER-2013 (`[0,1]`-scaled).
 
 ```python
-# apps/backend/ml/vision/emotion_classifier.py
+# Default: real image features (NumPy/Pillow), no model download required.
+gray     = vision_signal.to_grayscale(rgb)
+features = vision_signal.extract_features(gray)   # brightness, contrast, sharpness, centroid
+result   = vision_signal.classify(features)        # → fatigue, gaze, face presence
 
-from transformers import pipeline
-import cv2
-import mediapipe as mp
-
-class VisionEmotionClassifier:
-    def __init__(self):
-        # Free Hugging Face model — runs on CPU
-        self.emotion_pipe = pipeline(
-            "image-classification",
-            model="dima806/facial_emotions_image_detection",
-            device=-1  # CPU; switch to 0 for GPU
-        )
-        self.face_mesh = mp.solutions.face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=True
-        )
-
-    def infer(self, frame_bytes: bytes) -> dict:
-        img = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
-        results = self.face_mesh.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        emotion_result = self.emotion_pipe(Image.fromarray(img))
-        return {
-            "emotion": emotion_result[0]["label"],
-            "confidence": emotion_result[0]["score"],
-            "landmarks_detected": results.multi_face_landmarks is not None
-        }
+# Optional: layer a trained facial-emotion model on top.
+#   pip install onnxruntime
+#   download emotion-ferplus-8.onnx (ONNX Model Zoo) or export a HF model
+#   set VISION_ONNX_MODEL_PATH=ml_models/emotion-ferplus-8.onnx
 ```
 
 ### 2. Audio Pipeline
 
-**Input:** 2-second audio chunk (PCM float32, 16kHz)  
-**Output:** `{ stress_level, vocal_emotion, speaking_tempo }`
+**Input:** 2-second 16-bit PCM WAV chunk (captured client-side via WebAudio)
+**Output:** `{ stress_level, vocal_emotion, speaking_tempo, pitch_variance }`
+
+The classifier (`services/audio_signal.py`) decodes the PCM WAV and computes
+real DSP features — RMS loudness, zero-crossing rate (harshness), energy-envelope
+variability, and onset rate (tempo) — and maps them to vocal stress and emotion
+with documented, monotone rules (louder + harsher + more erratic → more stress).
+The frontend sends actual PCM WAV (not an opaque compressed webm/opus blob) so
+these features reflect the real microphone signal.
 
 ```python
-# apps/backend/ml/audio/emotion_classifier.py
-
-import librosa
-import numpy as np
-from transformers import pipeline
-
-class AudioEmotionClassifier:
-    def __init__(self):
-        self.ser_pipe = pipeline(
-            "audio-classification",
-            model="facebook/wav2vec2-base",
-            device=-1
-        )
-
-    def extract_features(self, audio: np.ndarray, sr: int = 16000) -> dict:
-        mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=13)
-        pitches, magnitudes = librosa.piptrack(y=audio, sr=sr)
-        tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
-        return {
-            "mfcc_mean": mfccs.mean(axis=1).tolist(),
-            "pitch_variance": float(pitches[pitches > 0].var()) if pitches.any() else 0.0,
-            "tempo": float(tempo),
-        }
+decoded = audio_signal.decode_wav(raw_wav_bytes)   # → (float samples, sample_rate) or None
+if decoded:
+    samples, sr = decoded
+    features = audio_signal.extract_features(samples, sr)  # rms, zcr, envelope_var, onset_rate
+    result   = audio_signal.classify(features)             # → stress, vocal_emotion, tempo, pitch
 ```
 
 ### 3. Behavior Pipeline
@@ -406,6 +402,15 @@ class MultimodalFusion:
         ...
 ```
 
+After fusion, the **Emotion Smoother** (`services/emotion_smoother.py`)
+temporally stabilizes the stream per session: an exponential moving average on
+the continuous metrics and hysteresis on the discrete emotion label (the label
+only changes once a new emotion persists, or arrives with very high confidence).
+It also derives a stress `trend` (rising/falling/steady) and a `stability`
+score, and the recommended adaptation is recomputed from the smoothed values so
+the advice matches the displayed numbers. This is what stops the mood indicator
+from flickering between unrelated emotions every frame.
+
 **Final output schema:**
 
 ```json
@@ -416,7 +421,11 @@ class MultimodalFusion:
   "cognitive_load": 0.68,
   "attention_level": 0.52,
   "burnout_risk": 0.41,
-  "recommended_adaptation": "reduce_complexity",
+  "recommended_adaptation": "reduce_ui_complexity",
+  "modalities_used": ["vision", "behavior"],
+  "smoothed": true,
+  "stability": 0.91,
+  "trend": "rising",
   "timestamp": "2024-01-15T14:32:00Z"
 }
 ```
@@ -757,17 +766,18 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ### Phase 1 — First Working Signal (Week 3–4)
 
 - [x] Behavior-only emotion inference (no camera/mic yet) *(heuristic behavior metrics feeding fusion service)*
-- [x] Frontend emotion badge (shows stress/cognitive load) *(floating glassmorphism EmotionBadge with animated pulse)*
+- [x] Frontend mood indicator (shows emotion/stress/trend) *(floating glassmorphism indicator: smoothed label, confidence, stress-trend arrow, stability readout — no emoji)*
 - [x] First adaptive UI response (reduce complexity on high stress) *(backend policy + `/api/v1/adaptation/config/{session_id}`)*
 - [x] Emotion history stored to Postgres *(SQLite emotion_snapshots table with paginated history API)*
 
 ### Phase 2 — Vision + Audio (Week 5–7)
 
 - [x] Camera capture hook + frame sender *(getUserMedia + 500ms JPEG frame capture)*
-- [x] Vision pipeline (MediaPipe + face emotion classifier) *(heuristic stub, swappable for MediaPipe + HuggingFace)*
-- [x] Audio capture hook + chunked sender *(MediaRecorder + 2s WAV chunk capture)*
-- [x] Audio pipeline (MFCC features + Wav2Vec2) *(heuristic stub, swappable for Wav2Vec2)*
+- [x] Vision pipeline (real image-stat classifier + optional ONNX FER model) *(NumPy/Pillow fatigue/gaze by default; drop-in ONNX FER+ / HuggingFace emotion model via `VISION_ONNX_MODEL_PATH`)*
+- [x] Audio capture hook + chunked sender *(WebAudio → real 16-bit PCM WAV, 2s chunks)*
+- [x] Audio pipeline (real DSP: RMS / ZCR / envelope / onsets) *(content-driven vocal stress, tempo, pitch variance)*
 - [x] Fusion of all three modalities *(weighted late fusion with auto-weight redistribution)*
+- [x] Temporal smoothing (EMA + label hysteresis) *(stable, low-jitter emotion stream with trend + stability; volatility asserted in tests)*
 - [x] Psychometric assessments — 5 validated instruments *(NASA-TLX, PSS-4, Flow Short Scale, Burnout Micro, Mood Check)*
 - [x] Sensor vs self-report calibration *(composite wellbeing snapshot with calibration delta)*
 
