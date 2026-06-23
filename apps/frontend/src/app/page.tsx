@@ -1,7 +1,83 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { api } from "@/lib/api";
+
+// ── Icon system ──────────────────────────────────────────────────
+// A single stroke-based line-icon set keeps the UI consistent and avoids
+// emoji, which render inconsistently across platforms and read as noise.
+
+type IconName =
+  | "dashboard" | "sessions" | "timeline" | "notifications" | "team" | "assessments"
+  | "logout" | "vision" | "audio" | "behavior" | "stop" | "play" | "check"
+  | "chevron-down" | "break" | "focus" | "bell-off" | "inbox" | "warning"
+  | "arrow-left" | "arrow-right" | "close" | "refresh" | "flame"
+  | "trend-up" | "trend-down" | "trend-steady";
+
+const ICON_PATHS: Record<IconName, ReactNode> = {
+  dashboard: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
+  sessions: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></>,
+  timeline: <path d="M3 12h4l2.5 6 4-14 2.5 8H21" />,
+  notifications: <><path d="M6 9a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6H4c.5-.5 2-2 2-6Z" /><path d="M10 20a2 2 0 0 0 4 0" /></>,
+  team: <><circle cx="9" cy="8" r="3.2" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0" /><path d="M16 5.4a3 3 0 0 1 0 5.9" /><path d="M17.2 14.8A5.5 5.5 0 0 1 20.5 19" /></>,
+  assessments: <><rect x="6" y="4" width="12" height="17" rx="2" /><rect x="9" y="2.5" width="6" height="3" rx="1" /><path d="M9 11h6M9 15h4" /></>,
+  logout: <><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4" /><path d="M9 12h11" /><path d="M13 8l4 4-4 4" /></>,
+  vision: <><rect x="3" y="6" width="18" height="13" rx="2.5" /><circle cx="12" cy="12.5" r="3.3" /><path d="M8.5 6l1.3-2h4.4L15.5 6" /></>,
+  audio: <><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v3" /></>,
+  behavior: <><rect x="3" y="7" width="18" height="11" rx="2" /><path d="M7 11h.01M11 11h.01M15 11h.01M7 14.5h10" /></>,
+  stop: <rect x="6" y="6" width="12" height="12" rx="2.5" />,
+  play: <path d="M8 5.5l11 6.5-11 6.5z" />,
+  check: <path d="M5 12.5l4.5 4.5L19 6.5" />,
+  "chevron-down": <path d="M6 9l6 6 6-6" />,
+  break: <><path d="M5 9h12v5a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4z" /><path d="M17 10h2a2 2 0 0 1 0 4h-2" /><path d="M8 2.5v2.5M12 2.5v2.5" /></>,
+  focus: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3.5" /></>,
+  "bell-off": <><path d="M8.5 7.5A6 6 0 0 1 18 9c0 4 1.5 5.5 2 6h-7" /><path d="M6 9c0 4-1.5 5.5-2 6h6" /><path d="M10 20a2 2 0 0 0 4 0" /><path d="M3 3l18 18" /></>,
+  inbox: <><path d="M4 13l2-8h12l2 8" /><path d="M4 13v5h16v-5" /><path d="M4 13h4l1.2 2h5.6l1.2-2H20" /></>,
+  warning: <><path d="M12 4l9 16H3z" /><path d="M12 10v4M12 17h.01" /></>,
+  "arrow-left": <path d="M14 6l-6 6 6 6" />,
+  "arrow-right": <path d="M10 6l6 6-6 6" />,
+  close: <path d="M6 6l12 12M18 6L6 18" />,
+  refresh: <><path d="M20 11a8 8 0 0 0-14-4.5L4 8" /><path d="M4 4v4h4" /><path d="M4 13a8 8 0 0 0 14 4.5L20 16" /><path d="M20 20v-4h-4" /></>,
+  flame: <path d="M12 3c3.2 3.8 4.5 6 4.5 9a4.5 4.5 0 0 1-9 0c0-1.3.6-2.4 1.4-3.4.6 1.2 1.3 1.4 2 1.4-.3-2.4-1.2-4.7 1.1-7z" />,
+  "trend-up": <><path d="M4 16l5-5 4 3 7-8" /><path d="M16 6h4v4" /></>,
+  "trend-down": <><path d="M4 8l5 5 4-3 7 8" /><path d="M16 18h4v-4" /></>,
+  "trend-steady": <path d="M4 12h16" />,
+};
+
+function Icon({ name, size = 18, className }: { name: IconName; size?: number; className?: string }) {
+  return (
+    <svg
+      className={className}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {ICON_PATHS[name]}
+    </svg>
+  );
+}
+
+function BrandMark({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+      <rect x="2" y="2" width="20" height="20" rx="6" fill="url(#fs-brand)" />
+      <path d="M6 15.5c2.2 0 2.2-7 4.5-7s2.3 7 4.5 7 2.2-3.5 3.5-3.5" stroke="white" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.95" />
+      <defs>
+        <linearGradient id="fs-brand" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+          <stop stopColor="var(--accent-primary)" />
+          <stop offset="1" stopColor="var(--accent-secondary)" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -148,7 +224,7 @@ function AuthPage({ onLogin }: { onLogin: (userId: string, name: string) => void
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-header">
-          <div className="logo">🧠</div>
+          <div className="logo"><BrandMark size={40} /></div>
           <h1>FlowState</h1>
           <p>{isRegister ? "Create your account" : "Sign in to your dashboard"}</p>
         </div>
@@ -240,6 +316,48 @@ function metricPath(points: number[], width: number, height: number, padding: { 
   }).join(" ");
 }
 
+// Encode Float32 mono PCM samples as a 16-bit PCM WAV blob. The backend audio
+// DSP pipeline needs real PCM, so we capture via WebAudio rather than sending
+// an opaque compressed (webm/opus) MediaRecorder blob it cannot decode.
+function encodeWav(samples: Float32Array, sampleRate: number): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);       // PCM chunk size
+  view.setUint16(20, 1, true);        // audio format = PCM
+  view.setUint16(22, 1, true);        // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true);        // block align
+  view.setUint16(34, 16, true);       // bits per sample
+  writeStr(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function titleCase(value: string | undefined) {
+  if (!value) return "";
+  return value.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function emotionTone(stress: number) {
+  if (stress > 0.6) return "alert";
+  if (stress > 0.35) return "watch";
+  return "calm";
+}
+
 function actionTone(action: string | undefined) {
   if (!action) return "normal";
   if (["suggest_break", "pause_notifications", "reduce_ui_complexity"].includes(action)) return "high";
@@ -260,6 +378,9 @@ interface EmotionStateData {
   recommended_adaptation: string;
   modalities_used: string[];
   timestamp: string;
+  smoothed?: boolean;
+  stability?: number;
+  trend?: "rising" | "falling" | "steady";
   vision?: { emotion: string; confidence: number; fatigue_score: number; gaze_direction: string; landmarks_detected: boolean } | null;
   audio?: { stress_level: number; vocal_emotion: string; speaking_tempo: number; pitch_variance: number } | null;
 }
@@ -404,7 +525,7 @@ export default function Home() {
   const adaptationRequestRef = useRef(0);
   const adaptationFetchedAtRef = useRef(0);
   const cameraRef = useRef<{ stream: MediaStream; video: HTMLVideoElement; canvas: HTMLCanvasElement; timer: number } | null>(null);
-  const audioRef = useRef<{ stream: MediaStream; recorder: MediaRecorder; timer: number } | null>(null);
+  const audioRef = useRef<{ stream: MediaStream; ctx: AudioContext; source: MediaStreamAudioSourceNode; processor: ScriptProcessorNode; timer: number } | null>(null);
 
   // Check auth on mount
   useEffect(() => {
@@ -525,30 +646,53 @@ export default function Home() {
     };
   }, [activeSession, modalities.vision, addActivity]);
 
-  // Audio capture — sends WAV chunks to /emotion/infer-audio
+  // Audio capture — captures real PCM via WebAudio and sends 16-bit WAV chunks
+  // to /emotion/infer-audio so the backend DSP pipeline can analyze the signal.
   useEffect(() => {
-    if (!activeSession || !modalities.audio) {
+    const teardown = () => {
       if (audioRef.current) {
         clearInterval(audioRef.current.timer);
-        audioRef.current.recorder.state !== "inactive" && audioRef.current.recorder.stop();
+        try { audioRef.current.processor.disconnect(); } catch {}
+        try { audioRef.current.source.disconnect(); } catch {}
+        if (audioRef.current.ctx.state !== "closed") audioRef.current.ctx.close().catch(() => {});
         audioRef.current.stream.getTracks().forEach(t => t.stop());
         audioRef.current = null;
       }
+    };
+
+    if (!activeSession || !modalities.audio) {
+      teardown();
       return;
     }
 
     let cancelled = false;
     (async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
 
-        const sendChunk = (blob: Blob) => {
-          if (cancelled || !activeSession) return;
+        const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+        const source = ctx.createMediaStreamSource(stream);
+        const processor = ctx.createScriptProcessor(4096, 1, 1);
+        let buffer: number[] = [];
+
+        processor.onaudioprocess = (e) => {
+          if (cancelled) return;
+          const input = e.inputBuffer.getChannelData(0);
+          for (let i = 0; i < input.length; i++) buffer.push(input[i]);
+        };
+
+        source.connect(processor);
+        processor.connect(ctx.destination);
+
+        const timer = window.setInterval(() => {
+          if (cancelled || !activeSession || buffer.length === 0) return;
+          const samples = new Float32Array(buffer);
+          buffer = [];
+          const blob = encodeWav(samples, ctx.sampleRate);
           const reader = new FileReader();
           reader.onloadend = () => {
-            const result = reader.result as string;
-            const b64 = result.split(",")[1];
+            const b64 = (reader.result as string).split(",")[1];
             if (b64) {
               api.inferAudio(activeSession, b64)
                 .then((data: EmotionStateData) => {
@@ -558,22 +702,9 @@ export default function Home() {
             }
           };
           reader.readAsDataURL(blob);
-        };
-
-        const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "" });
-        recorder.ondataavailable = (e) => { if (e.data.size > 0) sendChunk(e.data); };
-
-        const timer = window.setInterval(() => {
-          if (recorder.state === "recording") {
-            recorder.stop();
-          }
-          if (!cancelled && recorder.state === "inactive") {
-            recorder.start();
-          }
         }, AUDIO_CHUNK_MS);
 
-        recorder.start();
-        audioRef.current = { stream, recorder, timer };
+        audioRef.current = { stream, ctx, source, processor, timer };
         addActivity("behavior", "Audio capture started");
       } catch {
         addActivity("behavior", "Microphone access denied or unavailable");
@@ -582,12 +713,7 @@ export default function Home() {
 
     return () => {
       cancelled = true;
-      if (audioRef.current) {
-        clearInterval(audioRef.current.timer);
-        if (audioRef.current.recorder.state !== "inactive") audioRef.current.recorder.stop();
-        audioRef.current.stream.getTracks().forEach(t => t.stop());
-        audioRef.current = null;
-      }
+      teardown();
     };
   }, [activeSession, modalities.audio, addActivity]);
 
@@ -747,27 +873,27 @@ export default function Home() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <div className="logo-icon">🧠</div>
+          <div className="logo-icon"><BrandMark size={26} /></div>
           <h1>FlowState</h1>
         </div>
         <nav className="sidebar-nav">
           <button className={`nav-item ${page === "dashboard" ? "active" : ""}`} onClick={() => setPage("dashboard")}>
-            <span className="icon">📊</span> Dashboard
+            <span className="icon"><Icon name="dashboard" /></span> Dashboard
           </button>
           <button className={`nav-item ${page === "sessions" ? "active" : ""}`} onClick={() => setPage("sessions")}>
-            <span className="icon">⏱️</span> Sessions
+            <span className="icon"><Icon name="sessions" /></span> Sessions
           </button>
           <button className={`nav-item ${page === "timeline" ? "active" : ""}`} onClick={() => setPage("timeline")}>
-            <span className="icon">~</span> Timeline
+            <span className="icon"><Icon name="timeline" /></span> Timeline
           </button>
           <button className={`nav-item ${page === "notifications" ? "active" : ""}`} onClick={() => setPage("notifications")}>
-            <span className="icon">🔔</span> Notifications
+            <span className="icon"><Icon name="notifications" /></span> Notifications
           </button>
           <button className={`nav-item ${page === "teams" ? "active" : ""}`} onClick={() => setPage("teams")}>
-            <span className="icon">👥</span> Team Analytics
+            <span className="icon"><Icon name="team" /></span> Team Analytics
           </button>
           <button className={`nav-item ${page === "assessments" ? "active" : ""}`} onClick={() => setPage("assessments")}>
-            <span className="icon">📋</span> Assessments
+            <span className="icon"><Icon name="assessments" /></span> Assessments
           </button>
         </nav>
         <div className="sidebar-footer">
@@ -777,7 +903,7 @@ export default function Home() {
               <div className="name">{displayName}</div>
               <div className="role">Developer</div>
             </div>
-            <button className="btn-icon" onClick={handleLogout} title="Sign out">🚪</button>
+            <button className="btn-icon" onClick={handleLogout} title="Sign out" aria-label="Sign out"><Icon name="logout" size={16} /></button>
           </div>
         </div>
       </aside>
@@ -801,24 +927,30 @@ export default function Home() {
         {page === "assessments" && <AssessmentsPage userId={userId} activeSession={activeSession} addActivity={addActivity} />}
       </main>
 
-      {/* Floating Emotion Badge */}
+      {/* Floating mood indicator — driven by the smoothed emotion stream */}
       {activeSession && emotionState && emotionState.modalities_used.length > 0 && (
-        <div className="emotion-badge" id="emotion-badge">
-          <span className={`badge-pulse ${emotionState.stress_level > 0.6 ? "stressed" : ""}`} />
-          <span className="badge-emoji">
-            {emotionState.emotion === "happy" ? "😊" :
-             emotionState.emotion === "sad" ? "😔" :
-             emotionState.emotion === "angry" ? "😤" :
-             emotionState.emotion === "fear" ? "😰" :
-             emotionState.emotion === "stressed" ? "😓" :
-             emotionState.emotion === "calm" ? "😌" :
-             emotionState.emotion === "surprise" ? "😲" :
-             emotionState.emotion === "frustrated" ? "😫" :
-             emotionState.emotion === "anxious" ? "😟" :
-             emotionState.emotion === "confident" ? "💪" : "😐"}
-          </span>
-          <span className="badge-label">{emotionState.emotion}</span>
-          <span className="badge-confidence">{(emotionState.confidence * 100).toFixed(0)}%</span>
+        <div className={`emotion-badge tone-${emotionTone(emotionState.stress_level)}`} id="emotion-badge">
+          <span className="badge-dot" />
+          <div className="badge-body">
+            <div className="badge-row">
+              <span className="badge-label">{titleCase(emotionState.emotion)}</span>
+              {emotionState.trend && emotionState.trend !== "steady" && (
+                <Icon
+                  name={emotionState.trend === "rising" ? "trend-up" : "trend-down"}
+                  size={13}
+                  className="badge-trend"
+                />
+              )}
+            </div>
+            <div className="badge-meta">
+              <span>{(emotionState.confidence * 100).toFixed(0)}% confidence</span>
+              {typeof emotionState.stability === "number" && (
+                <span className="badge-stability" title="Signal stability">
+                  {emotionState.stability >= 0.8 ? "stable" : emotionState.stability >= 0.5 ? "settling" : "volatile"}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -852,9 +984,9 @@ function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnl
             <div className="live-indicator"><div className="live-dot" /> LIVE</div>
           )}
           {activeSession ? (
-            <button className="btn btn-danger" onClick={onEndSession}>⏹ End Session</button>
+            <button className="btn btn-danger" onClick={onEndSession}><Icon name="stop" size={15} /> End Session</button>
           ) : (
-            <button className="btn btn-primary" onClick={onStartSession}>▶ Start Session</button>
+            <button className="btn btn-primary" onClick={onStartSession}><Icon name="play" size={15} /> Start Session</button>
           )}
         </div>
       </div>
@@ -926,7 +1058,7 @@ function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnl
               disabled={!activeSession}
               title="Toggle camera capture"
             >
-              <span className="modality-icon">📷</span>
+              <span className="modality-icon"><Icon name="vision" size={22} /></span>
               <span className="modality-label">Vision</span>
               <span className={`modality-status ${modalities.vision ? "on" : "off"}`}>
                 {modalities.vision ? "ON" : "OFF"}
@@ -938,7 +1070,7 @@ function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnl
               disabled={!activeSession}
               title="Toggle microphone capture"
             >
-              <span className="modality-icon">🎤</span>
+              <span className="modality-icon"><Icon name="audio" size={22} /></span>
               <span className="modality-label">Audio</span>
               <span className={`modality-status ${modalities.audio ? "on" : "off"}`}>
                 {modalities.audio ? "ON" : "OFF"}
@@ -950,7 +1082,7 @@ function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnl
               disabled={!activeSession}
               title="Toggle keyboard/mouse tracking"
             >
-              <span className="modality-icon">⌨️</span>
+              <span className="modality-icon"><Icon name="behavior" size={22} /></span>
               <span className="modality-label">Behavior</span>
               <span className={`modality-status ${modalities.behavior ? "on" : "off"}`}>
                 {modalities.behavior ? "ON" : "OFF"}
@@ -992,11 +1124,11 @@ function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnl
           </div>
           <div className="activity-feed">
             {activity.length === 0 ? (
-              <div className="empty-state"><div className="icon">📭</div><p>No activity yet</p></div>
+              <div className="empty-state"><div className="icon"><Icon name="inbox" size={26} /></div><p>No activity yet</p></div>
             ) : activity.map(item => (
               <div key={item.id} className="activity-item">
                 <div className={`activity-icon ${item.type}`}>
-                  {item.type === "session" ? "⏱️" : item.type === "notification" ? "🔔" : item.type === "auth" ? "🔑" : "📊"}
+                  <Icon name={item.type === "session" ? "sessions" : item.type === "notification" ? "notifications" : item.type === "auth" ? "logout" : "dashboard"} size={15} />
                 </div>
                 <div>
                   <div className="activity-text">{item.text}</div>
@@ -1014,11 +1146,16 @@ function DashboardPage({ snapshot, activeSession, sessions, activity, backendOnl
             {activeSession && <span className="status-badge active"><span className="status-dot" /> Active</span>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ fontSize: 40 }}>
-              {adaptationAction === "reduce_ui_complexity" ? "🔽" :
-               adaptationAction === "suggest_break" ? "☕" :
-               adaptationAction === "enable_focus_mode" ? "🎯" :
-               adaptationAction === "pause_notifications" ? "🔕" : "✅"}
+            <div className={`adaptation-mark tone-${actionTone(adaptationAction)}`}>
+              <Icon
+                name={
+                  adaptationAction === "reduce_ui_complexity" ? "chevron-down" :
+                  adaptationAction === "suggest_break" ? "break" :
+                  adaptationAction === "enable_focus_mode" ? "focus" :
+                  adaptationAction === "pause_notifications" ? "bell-off" : "check"
+                }
+                size={22}
+              />
             </div>
             <div>
               <div style={{ fontSize: 18, fontWeight: 700 }}>
@@ -1092,7 +1229,7 @@ function EmotionRadar({ emotionState }: { emotionState: EmotionStateData | null 
   if (!emotionState || emotionState.modalities_used.length === 0) {
     return (
       <div className="empty-state" style={{ padding: "40px 20px" }}>
-        <div className="icon">🎯</div>
+        <div className="icon"><Icon name="focus" size={26} /></div>
         <p>Enable vision or audio modalities to see the emotion radar</p>
       </div>
     );
@@ -1205,11 +1342,11 @@ function AttentionHeatmap({ points, activeSession, attentionLevel }: {
   const clicks = recentPoints.filter(point => point.kind === "click").length;
 
   if (!activeSession) {
-    return <div className="empty-state"><div className="icon">+</div><p>Start a session to capture attention zones</p></div>;
+    return <div className="empty-state"><div className="icon"><Icon name="focus" size={26} /></div><p>Start a session to capture attention zones</p></div>;
   }
 
   if (recentPoints.length === 0) {
-    return <div className="empty-state"><div className="icon">+</div><p>Move or click in the dashboard to populate the heatmap</p></div>;
+    return <div className="empty-state"><div className="icon"><Icon name="focus" size={26} /></div><p>Move or click in the dashboard to populate the heatmap</p></div>;
   }
 
   return (
@@ -1363,7 +1500,7 @@ function TimelinePage({ sessions, activeSession, liveSnapshot }: {
 
       {!resolvedSession ? (
         <div className="card">
-          <div className="empty-state"><div className="icon">~</div><p>Start a session to build a timeline</p></div>
+          <div className="empty-state"><div className="icon"><Icon name="timeline" size={26} /></div><p>Start a session to build a timeline</p></div>
         </div>
       ) : (
         <div className="dashboard-grid">
@@ -1428,7 +1565,7 @@ function StressTimelineChart({ history, liveSnapshot, loading }: {
   }
 
   if (records.length === 0) {
-    return <div className="empty-state"><div className="icon">~</div><p>No behavior samples for this session yet</p></div>;
+    return <div className="empty-state"><div className="icon"><Icon name="timeline" size={26} /></div><p>No behavior samples for this session yet</p></div>;
   }
 
   return (
@@ -1541,7 +1678,7 @@ function NotificationsPage({ activeSession, addActivity }: { activeSession: stri
         <div className="card">
           <div className="card-header"><div className="card-title">Test a Notification</div></div>
           {!activeSession ? (
-            <div className="empty-state"><div className="icon">⚠️</div><p>Start a session first from Dashboard</p></div>
+            <div className="empty-state"><div className="icon"><Icon name="warning" size={26} /></div><p>Start a session first from Dashboard</p></div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div className="input-group">
@@ -1569,8 +1706,8 @@ function NotificationsPage({ activeSession, addActivity }: { activeSession: stri
           <div className="card-header"><div className="card-title">Result</div></div>
           {result ? (
             <div style={{ textAlign: "center", padding: 20 }}>
-              <div style={{ fontSize: 56, marginBottom: 12 }}>
-                {result.decision === "deliver" ? "✅" : result.decision === "queue" ? "⏳" : "🚫"}
+              <div className={`decision-mark ${result.decision}`}>
+                <Icon name={result.decision === "deliver" ? "check" : result.decision === "queue" ? "sessions" : "close"} size={26} />
               </div>
               <span className={`status-badge ${result.decision}`} style={{ fontSize: 16, padding: "8px 24px" }}>
                 {result.decision.toUpperCase()}
@@ -1578,7 +1715,7 @@ function NotificationsPage({ activeSession, addActivity }: { activeSession: stri
               <p style={{ marginTop: 16, fontSize: 13, color: "var(--text-secondary)" }}>{result.reason}</p>
             </div>
           ) : (
-            <div className="empty-state"><div className="icon">🔔</div><p>Send a test notification</p></div>
+            <div className="empty-state"><div className="icon"><Icon name="notifications" size={26} /></div><p>Send a test notification</p></div>
           )}
         </div>
       </div>
@@ -1641,7 +1778,7 @@ function TeamsPage({ userId }: { userId: string }) {
               </table>
             </div>
           ) : (
-            <div className="empty-state"><div className="icon">👥</div><p>Create or load a team</p></div>
+            <div className="empty-state"><div className="icon"><Icon name="team" size={26} /></div><p>Create or load a team</p></div>
           )}
         </div>
       </div>
@@ -1774,12 +1911,12 @@ function AssessmentsPage({ userId, activeSession, addActivity }: {
     s === "high" ? "var(--accent-danger)" :
     "#ff4444";
 
-  const instrumentEmoji = (type: string) =>
-    type === "nasa_tlx" ? "🧠" :
-    type === "pss4" ? "😰" :
-    type === "flow_short" ? "🌊" :
-    type === "burnout_micro" ? "🔥" :
-    type === "mood_check" ? "🎭" : "📋";
+  const instrumentIconName = (type: string): IconName =>
+    type === "nasa_tlx" ? "dashboard" :
+    type === "pss4" ? "warning" :
+    type === "flow_short" ? "timeline" :
+    type === "burnout_micro" ? "flame" :
+    type === "mood_check" ? "focus" : "assessments";
 
   return (
     <>
@@ -1797,10 +1934,10 @@ function AssessmentsPage({ userId, activeSession, addActivity }: {
         <div className="card assessment-card" style={{ marginBottom: 24 }}>
           <div className="card-header">
             <div>
-              <div className="card-title">{instrumentEmoji(activeInstrument.instrument_type)} {activeInstrument.name}</div>
+              <div className="card-title title-with-icon"><Icon name={instrumentIconName(activeInstrument.instrument_type)} size={18} /> {activeInstrument.name}</div>
               <div className="card-subtitle">Question {currentQ + 1} of {activeInstrument.questions.length}</div>
             </div>
-            <button className="btn btn-small" onClick={() => { setActiveInstrument(null); setResult(null); }}>✕ Cancel</button>
+            <button className="btn btn-small" onClick={() => { setActiveInstrument(null); setResult(null); }}><Icon name="close" size={14} /> Cancel</button>
           </div>
 
           {/* Progress bar */}
@@ -1833,9 +1970,9 @@ function AssessmentsPage({ userId, activeSession, addActivity }: {
                 ))}
               </div>
               <div className="question-nav">
-                <button className="btn btn-small" onClick={() => setCurrentQ(Math.max(0, currentQ - 1))} disabled={currentQ === 0}>← Previous</button>
+                <button className="btn btn-small" onClick={() => setCurrentQ(Math.max(0, currentQ - 1))} disabled={currentQ === 0}><Icon name="arrow-left" size={14} /> Previous</button>
                 {currentQ < activeInstrument.questions.length - 1 ? (
-                  <button className="btn btn-small" onClick={() => setCurrentQ(currentQ + 1)} disabled={!responses[q.id]}>Next →</button>
+                  <button className="btn btn-small" onClick={() => setCurrentQ(currentQ + 1)} disabled={!responses[q.id]}>Next <Icon name="arrow-right" size={14} /></button>
                 ) : (
                   <button className="btn btn-primary" onClick={submitAssessment} disabled={!allAnswered || submitting}>
                     {submitting ? "Scoring..." : "Submit Assessment"}
@@ -1852,7 +1989,7 @@ function AssessmentsPage({ userId, activeSession, addActivity }: {
         <div className="card assessment-result" style={{ marginBottom: 24 }}>
           <div className="card-header">
             <div>
-              <div className="card-title">{instrumentEmoji(result.instrument_type)} {result.instrument_name} — Results</div>
+              <div className="card-title title-with-icon"><Icon name={instrumentIconName(result.instrument_type)} size={18} /> {result.instrument_name} — Results</div>
               <div className="card-subtitle">{result.interpretation}</div>
             </div>
             <span className="status-badge" style={{ background: `${severityColor(result.severity)}22`, color: severityColor(result.severity) }}>
@@ -1891,8 +2028,8 @@ function AssessmentsPage({ userId, activeSession, addActivity }: {
             ))}
           </div>
 
-          <button className="btn" onClick={() => { setActiveInstrument(null); setResult(null); }} style={{ marginTop: 16 }}>
-            ← Back to Instruments
+          <button className="btn title-with-icon" onClick={() => { setActiveInstrument(null); setResult(null); }} style={{ marginTop: 16 }}>
+            <Icon name="arrow-left" size={14} /> Back to Instruments
           </button>
         </div>
       )}
@@ -1944,7 +2081,7 @@ function AssessmentsPage({ userId, activeSession, addActivity }: {
               <div className="instrument-list">
                 {instruments.map(inst => (
                   <button key={inst.type} className="instrument-item" onClick={() => startAssessment(inst.type)} disabled={!userId}>
-                    <div className="instrument-emoji">{instrumentEmoji(inst.type)}</div>
+                    <div className="instrument-emoji"><Icon name={instrumentIconName(inst.type)} size={20} /></div>
                     <div className="instrument-info">
                       <div className="instrument-name">{inst.name}</div>
                       <div className="instrument-desc">{inst.description}</div>
@@ -1966,7 +2103,7 @@ function AssessmentsPage({ userId, activeSession, addActivity }: {
                 <div className="assessment-history-list">
                   {history.map((r, i) => (
                     <div key={i} className="history-item">
-                      <span className="history-emoji">{instrumentEmoji(r.instrument_type)}</span>
+                      <span className="history-emoji"><Icon name={instrumentIconName(r.instrument_type)} size={18} /></span>
                       <div className="history-info">
                         <div className="history-name">{r.instrument_name}</div>
                         <div className="history-time">{new Date(r.completed_at).toLocaleDateString()} {new Date(r.completed_at).toLocaleTimeString()}</div>
@@ -1980,7 +2117,7 @@ function AssessmentsPage({ userId, activeSession, addActivity }: {
                 </div>
               ) : (
                 <div className="empty-state">
-                  <div className="icon">📋</div>
+                  <div className="icon"><Icon name="assessments" size={26} /></div>
                   <p>No assessments taken yet</p>
                 </div>
               )}

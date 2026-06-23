@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     enable_auth: bool = Field(default=True)
 
     database_url: str = Field(default="sqlite:///./flowstate.db")
+
+    # Optional path to an exported facial-emotion ONNX model. When set and
+    # loadable, the vision pipeline runs real model inference for the emotion
+    # label; otherwise it uses the signal classifier. See services/onnx_emotion.py.
+    vision_onnx_model_path: str = Field(default="")
     behavior_window_size: int = Field(default=500, ge=100, le=5000)
     rl_alpha: float = Field(default=0.1, ge=0.01, le=1.0)
     rl_gamma: float = Field(default=0.9, ge=0.01, le=0.99)

@@ -17,6 +17,7 @@ from models.behavior import BehaviorSnapshot
 from models.emotion import AudioResult, EmotionState, VisionResult
 from services.audio_service import AudioService
 from services.behavior_session_service import BehaviorSessionService
+from services.emotion_smoother import EmotionSmoother
 from services.fusion_service import FusionService
 from services.vision_service import VisionService
 
@@ -33,12 +34,14 @@ class EmotionPipeline:
         audio_service: AudioService,
         fusion_service: FusionService,
         behavior_sessions: BehaviorSessionService,
+        smoother: EmotionSmoother | None = None,
     ) -> None:
         self._repository = repository
         self._vision = vision_service
         self._audio = audio_service
         self._fusion = fusion_service
         self._behavior_sessions = behavior_sessions
+        self._smoother = smoother or EmotionSmoother()
 
     def infer_frame(self, session_id: str, frame_b64: str) -> EmotionState:
         """Process a camera frame and produce a fused emotion state."""
@@ -52,6 +55,7 @@ class EmotionPipeline:
             behavior=behavior,
         )
 
+        state = self._finalize(state)
         self._persist_and_broadcast(state)
         return state
 
@@ -73,6 +77,7 @@ class EmotionPipeline:
             behavior=behavior,
         )
 
+        state = self._finalize(state)
         self._persist_and_broadcast(state)
         return state
 
@@ -103,6 +108,7 @@ class EmotionPipeline:
             behavior=behavior,
         )
 
+        state = self._finalize(state)
         self._persist_and_broadcast(state)
         return state
 
@@ -118,6 +124,30 @@ class EmotionPipeline:
     ) -> tuple[list[EmotionState], bool]:
         """Get emotion history for a session."""
         return self._repository.get_emotion_history(session_id, limit, before_id)
+
+    def end_session(self, session_id: str) -> None:
+        """Release smoothing state for a finished session."""
+        self._smoother.reset(session_id)
+
+    def _finalize(self, state: EmotionState) -> EmotionState:
+        """Temporally smooth the fused state and realign the recommendation.
+
+        Because smoothing changes the continuous metrics, the recommended
+        adaptation is recomputed from the *smoothed* values so the advice the
+        user sees matches the numbers the user sees.
+        """
+        smoothed = self._smoother.smooth(state)
+        if smoothed.modalities_used:
+            smoothed = smoothed.model_copy(
+                update={
+                    "recommended_adaptation": self._fusion.recommend_adaptation(
+                        smoothed.stress_level,
+                        smoothed.cognitive_load,
+                        smoothed.attention_level,
+                    )
+                }
+            )
+        return smoothed
 
     def _get_behavior_snapshot(self, session_id: str) -> BehaviorSnapshot | None:
         """Try to get current behavior snapshot for the session."""

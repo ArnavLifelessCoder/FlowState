@@ -180,6 +180,14 @@ class FusionService:
                 return emotion
         return candidates[0]
 
+    def recommend_adaptation(self, stress: float, cognitive_load: float, attention: float) -> str:
+        """Public entry point for recomputing an adaptation from metric values.
+
+        Used after temporal smoothing so the recommendation stays consistent
+        with the smoothed metrics shown to the user.
+        """
+        return self._recommended_adaptation(stress, cognitive_load, attention)
+
     @staticmethod
     def _recommended_adaptation(stress: float, cognitive_load: float, attention: float) -> str:
         if stress >= 0.75:

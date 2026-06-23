@@ -57,6 +57,14 @@ class EmotionState(BaseModel):
     modalities_used: list[str] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    # Temporal context (populated by EmotionSmoother). ``raw`` reflects the
+    # instantaneous fusion output before smoothing, ``smoothed`` marks whether
+    # this state has been temporally stabilized, and ``trend`` describes how
+    # stress is moving over the recent window.
+    smoothed: bool = False
+    stability: float = Field(default=1.0, ge=0.0, le=1.0, description="How settled the signal is (1.0 = steady)")
+    trend: Literal["rising", "falling", "steady"] = "steady"
+
     # Per-modality breakdown (optional, for transparency)
     vision: VisionResult | None = None
     audio: AudioResult | None = None

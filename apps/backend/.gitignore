@@ -1,0 +1,11 @@
+# Large ML model binaries — download separately, do not commit.
+ml_models/
+*.onnx
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Local database
+*.db

@@ -1,4 +1,4 @@
-# 🧠 FlowState
+# FlowState
 
 > **Real-Time Emotionally Adaptive AI Platform** — a full-stack system that monitors cognitive load, attention, and stress in real time, then adapts digital experiences accordingly.
 
@@ -20,9 +20,10 @@ FlowState consists of a **FastAPI backend** (Python) and a **Next.js 16 dashboar
 - **GDPR Privacy** — full data export, cascading deletion, and sensing pause/resume controls.
 - **Schema Migrations** — versioned migration tracking for forward-compatible DB evolution.
 - **Multimodal Emotion Pipeline** — orchestrates vision (camera), audio (microphone), and behavior modalities with weighted late fusion.
-- **Vision Service** — processes base64 JPEG frames for face emotion classification and gaze direction detection.
-- **Audio Service** — processes base64 WAV chunks for vocal stress, emotion, speaking tempo, and pitch variance.
+- **Vision Service** — decodes JPEG frames and derives **real** image features (brightness, contrast, Laplacian sharpness, brightness centroid) into fatigue, gaze direction, and face presence. An optional ONNX facial-emotion model (config-gated) layers a trained emotion label on top. Falls back to a deterministic heuristic only when the scientific stack or a decodable frame is unavailable.
+- **Audio Service** — decodes 16-bit PCM WAV chunks and computes **real** DSP features (RMS loudness, zero-crossing rate, energy-envelope variability, onset rate) into vocal stress, emotion, speaking tempo, and pitch variance. Falls back to a deterministic heuristic only when a chunk is not parseable PCM WAV.
 - **Fusion Service** — combines vision, audio, and behavior signals with configurable weights and automatic weight redistribution for missing modalities.
+- **Emotion Smoother** — temporal stabilization of the per-frame fusion stream: exponential moving average on continuous metrics, hysteresis on the discrete emotion label, plus derived stress `trend` (rising/falling/steady) and a `stability` score. Eliminates the per-frame flicker that made the raw mood signal read as random, and keeps the recommended adaptation aligned with the smoothed metrics.
 - **Emotion Snapshots** — persistent storage for fused multimodal emotion states with paginated history.
 - **Psychometric Assessments** — 5 validated instruments (NASA-TLX, PSS-4, Flow Short Scale, Burnout Micro, Mood Check) with scoring, trend analysis, and composite wellbeing snapshots.
 - **Sensor Calibration** — compares real-time sensor estimates with self-reported ground truth to compute calibration deltas.
@@ -43,10 +44,11 @@ FlowState consists of a **FastAPI backend** (Python) and a **Next.js 16 dashboar
 - **Activity feed** — real-time log of user actions.
 - **Design system** — dark glassmorphism theme with Inter font, gradient accents, and micro-animations.
 - **Camera Capture** — webcam access with frame capture every 500ms, sent as base64 JPEG for vision inference.
-- **Audio Capture** — microphone access with 2s WAV chunk recording via MediaRecorder API.
+- **Audio Capture** — microphone access via WebAudio, capturing real 16-bit PCM and encoding 2s WAV chunks client-side so the backend DSP pipeline analyzes the actual signal (not an opaque compressed blob).
 - **Emotion Radar** — SVG pentagon chart visualizing stress, cognitive load, distraction, burnout risk, and uncertainty in real-time.
 - **Modality Controls** — toggle buttons for enabling/disabling vision (camera), audio (mic), and behavior (keyboard/mouse) sensing.
-- **Floating Emotion Badge** — glassmorphism floating indicator showing current emotion with emoji, label, confidence, and animated pulse.
+- **Floating Mood Indicator** — glassmorphism floating indicator showing the smoothed emotion label, confidence, stress trend (directional arrow), and a signal-stability readout (stable/settling/volatile), color-coded by stress tone. Driven by the backend Emotion Smoother so it stays calm instead of flickering.
+- **Line-icon design system** — a single stroke-based SVG icon set replaces emoji throughout the UI for consistent cross-platform rendering.
 - **Assessment Page** — full interactive assessment-taking flow with question stepper, animated scale buttons, result display with score circle, subscale breakdowns, assessment history, and composite wellbeing dashboard.
 - **Wellbeing Calibration** — shows delta between sensor estimates and self-report to validate sensing accuracy over time.
 
@@ -63,8 +65,9 @@ MemoryService builds long-term behavioral profiles and generates proactive sugge
 Multimodal pipeline (Phase 2):
 Camera frame / Audio chunk -> VisionService / AudioService inference ->
 FusionService combines with BehaviorSnapshot ->
+EmotionState temporally smoothed (EmotionSmoother) ->
 EmotionState persisted in emotion_snapshots table ->
-Frontend displays on EmotionRadar + floating EmotionBadge
+Frontend displays on EmotionRadar + floating Mood Indicator
 
 Frontend behavior tracking samples mouse movement before sending it to the backend, records bounded client-side attention points for the heatmap, and polls current snapshots without injecting synthetic behavior into the model.
 
@@ -273,7 +276,22 @@ npm install
 npm run dev                             # runs on localhost:3000
 ```
 
-### Run tests (140 passing)
+### Open the app
+Once both are running, open **http://localhost:3000** in your browser and
+register an account (the first screen). The frontend talks to the backend via
+`apps/frontend/.env.local`:
+
+```
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_WS_URL=ws://localhost:8000
+```
+
+If port 8000 is already in use, start the backend on another port
+(`uvicorn main:app --port 8001`) and change both URLs above to match, then
+restart `npm run dev`. The backend's interactive API docs are at
+`http://localhost:8000/docs`.
+
+### Run tests (237 passing)
 ```bash
 cd apps/backend
 python -m pytest tests/ -v
@@ -287,7 +305,7 @@ npm run build
 ```
 
 Latest local verification:
-- `python -m pytest tests/ -q`: 140 passed
+- `python -m pytest tests/ -q`: 237 passed
 - `npm run lint`: passed
 - `npm run build`: passed
 - Playwright smoke check: auth page, mocked heatmap, measurement guide, and minimal/advanced adaptive UI modes rendered without page errors
@@ -309,6 +327,7 @@ All settings are loaded from environment variables:
 - rl_alpha (default: 0.1)
 - rl_gamma (default: 0.9)
 - rl_epsilon (default: 0.1)
+- vision_onnx_model_path (default: "" — set to an exported `.onnx` facial-emotion model to enable the ONNX backend; requires `onnxruntime`)
 
 ## Storage
 
@@ -415,7 +434,7 @@ apps/
 │   │   ├── audio_service.py      # Audio chunk → vocal stress + emotion
 │   │   ├── fusion_service.py     # Weighted multimodal late fusion
 │   │   └── emotion_pipeline.py   # Orchestrator for all modalities
-│   └── tests/            # 160+ unit + integration tests
+│   └── tests/            # 237 unit + integration tests
 └── frontend/             # Next.js 16 (TypeScript)
     └── src/
         ├── app/          # App Router pages + globals.css
@@ -424,6 +443,57 @@ apps/
 
 ## Notes
 
-The behavior metrics and adaptation policy are heuristic and intended as a baseline. The RL service updates Q-values based on feedback rewards stored in SQLite. The behavioral memory system builds long-term profiles from accumulated snapshot history and generates proactive suggestions based on detected patterns. CORS is pre-configured for localhost:3000 (Next.js dev server).
+The behavioral memory system builds long-term profiles from accumulated snapshot history and generates proactive suggestions based on detected patterns.
 
-The multimodal emotion pipeline uses heuristic classifiers as drop-in stubs for production ML models. To swap in real models, replace `_classify_frame` (in VisionService) with a HuggingFace pipeline (e.g. `dima806/facial_emotions_image_detection` + MediaPipe face mesh) and `_classify_chunk` (in AudioService) with a Wav2Vec2 pipeline. The fusion service supports configurable per-modality weights and automatically redistributes weights when modalities are missing.
+### Emotion inference: accuracy and how to upgrade it
+
+The pipeline is layered so the signal is honest at every tier:
+
+- **Signal classifiers (default, always on).** `services/vision_signal.py` and
+  `services/audio_signal.py` compute real features from the actual frame/audio
+  (image brightness/contrast/Laplacian-sharpness/centroid; audio RMS/ZCR/energy-
+  envelope/onsets). These drive fatigue, gaze, vocal stress, tempo, and pitch
+  variance — values that genuinely move with the input. The vision signal
+  classifier intentionally does **not** invent a facial *emotion* label from raw
+  pixels (that requires a trained model); it reports `neutral` with honest,
+  exposure-based confidence rather than guessing.
+- **ONNX facial-emotion model (optional, real ML).** A trained model supplies
+  the facial *emotion* label/confidence, layered over the signal classifier's
+  fatigue/gaze (see `services/onnx_emotion.py`). It runs locally via ONNX
+  Runtime — no API key, no hosted inference, no per-call cost.
+
+  Quickest setup (FER+, a ready-made `.onnx`, no training/export):
+  ```bash
+  pip install onnxruntime
+  mkdir -p apps/backend/ml_models
+  curl -L -o apps/backend/ml_models/emotion-ferplus-8.onnx \
+    https://media.githubusercontent.com/media/onnx/models/main/validated/vision/body_analysis/emotion_ferplus/model/emotion-ferplus-8.onnx
+  # then in apps/backend/.env:
+  #   VISION_ONNX_MODEL_PATH=ml_models/emotion-ferplus-8.onnx
+  ```
+  The classifier auto-detects the model: an 8-class output is treated as FER+
+  (FER+ label order, raw 0–255 input); other models default to FER-2013 order
+  with `[0,1]`-scaled input. To use a HuggingFace model instead, export it with
+  `optimum-cli export onnx --model dima806/facial_emotions_image_detection
+  fer_onnx/` and point the path at `fer_onnx/model.onnx` (override labels via the
+  `OnnxVisionClassifier(labels=...)` constructor if its order differs). The audio
+  path can be extended the same way with a Wav2Vec2-style speech-emotion model.
+- **Heuristic fallback.** The legacy content-hash classifier is retained only as
+  a last resort when the scientific stack is missing or a chunk can't be decoded,
+  so the service never hard-fails.
+
+**Volatility / accuracy.** Per-frame inference is noisy by nature, so the
+`EmotionSmoother` applies an EMA low-pass filter to the continuous metrics and
+hysteresis to the discrete label, and the recommended adaptation is recomputed
+from the smoothed values. `tests/test_signal_classifiers.py` asserts both that
+the classifiers respond correctly to controlled inputs (louder/harsher audio →
+more stress; blurrier/dimmer frames → more fatigue; bright-region position →
+gaze) **and** that the end-to-end smoothed stress stream stays low-jitter
+(frame-to-frame change bounded) with rare label switches even under a fully
+random frame stream.
+
+The behavior metrics and adaptation policy remain heuristic baselines; the RL
+service updates Q-values from feedback rewards stored in SQLite. The fusion
+service supports configurable per-modality weights and automatically
+redistributes weights when modalities are missing. CORS is pre-configured for
+localhost:3000 (Next.js dev server).

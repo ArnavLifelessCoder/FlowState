@@ -4,3 +4,11 @@ pydantic
 pydantic-settings
 PyJWT
 bcrypt
+
+# Real signal-driven emotion pipeline (vision image stats + audio DSP).
+numpy
+pillow
+
+# Optional: real facial-emotion model inference. Install to enable the ONNX
+# backend, then set vision_onnx_model_path to an exported .onnx model.
+# onnxruntime

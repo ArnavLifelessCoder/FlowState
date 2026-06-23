@@ -50,7 +50,7 @@ team_analytics_service = TeamAnalyticsService(behavior_repository)
 auth_service = AuthService(behavior_repository)
 
 # ── Multimodal Emotion Pipeline ───────────────────────────────────
-vision_service = VisionService()
+vision_service = VisionService(onnx_model_path=settings.vision_onnx_model_path or None)
 audio_service = AudioService()
 fusion_service = FusionService()
 emotion_pipeline = EmotionPipeline(
