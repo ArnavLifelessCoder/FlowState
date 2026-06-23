@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     jwt_secret: str = Field(default="flowstate-dev-secret-change-in-production-32chars", min_length=32)
     enable_auth: bool = Field(default=True)
 
+    # Comma-separated list of allowed frontend origins, e.g. https://flowstate-frontend.onrender.com
+    frontend_url: str = Field(default="")
+
     database_url: str = Field(default="sqlite:///./flowstate.db")
 
     # Optional path to an exported facial-emotion ONNX model. When set and

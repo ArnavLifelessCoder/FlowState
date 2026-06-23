@@ -17,9 +17,17 @@ setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title=settings.app_name)
+
+_cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+if settings.frontend_url:
+    for _origin in settings.frontend_url.split(","):
+        _origin = _origin.strip()
+        if _origin and _origin not in _cors_origins:
+            _cors_origins.append(_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_cors_origins,
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],

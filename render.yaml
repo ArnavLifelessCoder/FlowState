@@ -1,0 +1,43 @@
+services:
+  # ── Backend (FastAPI) ────────────────────────────────────────────
+  - type: web
+    name: flowstate-backend
+    runtime: python
+    pythonVersion: "3.12"
+    rootDir: apps/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    # Render Disk keeps SQLite data across deploys (requires paid plan).
+    # Remove the `disk` block if you are on the free tier (data resets on redeploy).
+    disk:
+      name: flowstate-db
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:////data/flowstate.db
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: ENABLE_AUTH
+        value: "true"
+      - key: API_TOKEN
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
+      # Set this after the frontend is deployed: https://flowstate-frontend.onrender.com
+      - key: FRONTEND_URL
+        sync: false
+
+  # ── Frontend (Next.js) ───────────────────────────────────────────
+  - type: web
+    name: flowstate-frontend
+    runtime: node
+    rootDir: apps/frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      # Set this to your backend's Render URL, e.g. https://flowstate-backend.onrender.com
+      - key: BACKEND_URL
+        sync: false
