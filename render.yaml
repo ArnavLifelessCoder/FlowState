@@ -41,3 +41,6 @@ services:
       # Set this to your backend's Render URL, e.g. https://flowstate-backend.onrender.com
       - key: BACKEND_URL
         sync: false
+      # NEXT_PUBLIC_* vars are baked in at build time — must redeploy (not just restart) after changing
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
